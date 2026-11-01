@@ -1,0 +1,38 @@
+{
+  "chatgpt_accounts": [
+    {
+      "id": "gpt_app",
+      "type": "codex_auth",
+      "name": "GPT · App 当前账号",
+      "enabled": true,
+      "email": "",
+      "auth_file": "~/.codex/auth.json",
+      "follow_current_session": true,
+      "auto_sync_chrome": false
+    },
+    {
+      "id": "gpt_web",
+      "type": "token_file",
+      "name": "GPT · 网页当前账号",
+      "enabled": true,
+      "email": "",
+      "auth_file": "~/.swiftbar/tokens/chatgpt_web.json",
+      "follow_current_session": true,
+      "auto_sync_chrome": true
+    }
+  ],
+  "antigravity": {
+    "enabled": true,
+    "email": "",
+    "name_gemini": "Antigravity · Gemini",
+    "name_claude": "Antigravity · Claude"
+  },
+  "linksapi": {
+    "enabled": false,
+    "visible": true,
+    "name": "Claude · LinksAPI",
+    "query_mode": "account",
+    "credential_source": "manual",
+    "low_balance_threshold": 5
+  }
+}

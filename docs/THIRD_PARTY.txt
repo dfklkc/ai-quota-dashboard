@@ -1,0 +1,10 @@
+AI 桌面卡片 / AI Quota Dashboard
+
+This app bundles CPython 3.13 from astral-sh/python-build-standalone.
+Upstream: https://github.com/astral-sh/python-build-standalone
+The exact upstream archives and SHA-256 digests are recorded in runtime/manifest.json.
+Python is distributed under the Python Software Foundation License and included
+third-party components retain their own license notices. Runtime license files
+are retained alongside the bundled runtime.
+
+The application icon was generated for this project using the built-in ImageGen tool.

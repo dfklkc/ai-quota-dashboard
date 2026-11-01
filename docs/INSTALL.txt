@@ -1,0 +1,23 @@
+AI 桌面卡片 1.0.0
+
+支持 macOS 14 或更高版本，Apple Silicon 与 Intel。
+
+方式一：打开 .pkg 安装包，将应用安装到 /Applications。
+方式二：把 DMG 中的“AI 桌面卡片”拖到 Applications 文件夹。
+安装完成后，在“应用程序”中打开“AI 桌面卡片”。
+
+已内置 Python 运行时与查询脚本，无需额外安装 Python、Xcode 或命令行工具。
+首次启动会建立 ~/.swiftbar/ai_accounts_config.json；更新保留已有配置和凭证。
+关闭卡片仅隐藏窗口，菜单栏入口可重新显示或退出。
+
+此版本使用本地 ad-hoc 签名，尚无 Apple Developer ID 签名与公证。
+从互联网下载时，macOS 可能要求你在系统设置中确认来源。
+
+账号范围：
+GPT 卡片显示 Codex 使用额度，跟随本机 App 与 Chrome 登录。
+Chrome 读取需要 macOS 自动化权限及 Chrome 的 Apple 事件 JavaScript 权限。
+Antigravity 必须正在运行并提供本地额度服务。
+LinksAPI 默认停用，需要你自行配置查询凭证。
+未设限 API Key 只能查询对应 Key 的用量，不能据此推算账户钱包余额。
+
+发布包不含作者的账号配置、浏览器会话、API Key、密码或额度缓存。
