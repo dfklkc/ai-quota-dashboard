@@ -542,32 +542,32 @@ class ConfigState: ObservableObject {
     @Published var relayUserId = ""
     @Published var relayThreshold = 5.0
     @Published var agyEnabled: Bool = true
-    
+
     @Published var tokenInputs: [String: String] = [:]
     @Published var expandedTokenAccounts: Set<String> = []
-    
+
     @Published var isAddingNew: Bool = false
     @Published var newName: String = ""
     @Published var newId: String = ""
     @Published var newEmail: String = ""
     @Published var newType: String = "token_file"
     @Published var newToken: String = ""
-    
+
     @Published var statusMessage: String? = nil
     @Published var isSuccess: Bool = false
     @Published var isBusy: Bool = false
-    
+
     let configPath = QuotaPaths.root + "/ai_accounts_config.json"
     let cardConfigPath = QuotaPaths.root + "/card_config.json"
     let tokensDir = QuotaPaths.root + "/tokens"
     let bindScriptPath = QuotaPaths.script("bind_account.py")
-    
+
     func load() {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
-        
+
         if let list = dict["chatgpt_accounts"] as? [[String: Any]] {
             var parsed: [AccountConfigItem] = []
             for d in list {
@@ -581,7 +581,7 @@ class ConfigState: ObservableObject {
             }
             self.accounts = parsed
         }
-        
+
         if let relay = dict["linksapi"] as? [String: Any] {
             relayEnabled = relay["enabled"] as? Bool ?? false
             relayVisible = relay["visible"] as? Bool ?? true
@@ -601,7 +601,7 @@ class ConfigState: ObservableObject {
             self.geminiName = agy["name_gemini"] as? String ?? "Antigravity · Gemini"
             self.claudeName = agy["name_claude"] as? String ?? "Antigravity · Claude"
         }
-        
+
         if let cardData = try? Data(contentsOf: URL(fileURLWithPath: cardConfigPath)),
            let cardDict = try? JSONSerialization.jsonObject(with: cardData) as? [String: Any],
            let names = cardDict["names"] as? [String: String] {
@@ -609,7 +609,7 @@ class ConfigState: ObservableObject {
             if let c = names["antigravity_claude"], !c.isEmpty && self.claudeName.isEmpty { self.claudeName = c }
         }
     }
-    
+
     func save(onSuccess: (() -> Void)? = nil) {
         do {
         var rootDict: [String: Any] = [:]
@@ -617,7 +617,7 @@ class ConfigState: ObservableObject {
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             rootDict = existing
         }
-        
+
         var relayCfg = rootDict["linksapi"] as? [String: Any] ?? [:]
         relayCfg["enabled"] = relayEnabled; relayCfg["visible"] = relayVisible
         relayCfg["name"] = relayName; relayCfg["query_mode"] = relayUseClaudeSettings ? "token" : relayMode
@@ -653,12 +653,12 @@ class ConfigState: ObservableObject {
                 "follow_current_session": acc.follow_current_session
             ]
             accList.append(item)
-            
+
             if acc.type == "token_file", !acc.follow_current_session, let token = tokenInputs[acc.id], !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let expandedPath = NSString(string: acc.auth_file).expandingTildeInPath
                 let dir = (expandedPath as NSString).deletingLastPathComponent
                 try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
-                
+
                 let tokenDict: [String: Any] = [
                     "access_token": token.trimmingCharacters(in: .whitespacesAndNewlines),
                     "email": acc.email
@@ -669,17 +669,17 @@ class ConfigState: ObservableObject {
             }
         }
         rootDict["chatgpt_accounts"] = accList
-        
+
         var agyDict: [String: Any] = rootDict["antigravity"] as? [String: Any] ?? [:]
         agyDict["enabled"] = agyEnabled
         agyDict["email"] = agyEmail
         agyDict["name_gemini"] = geminiName
         agyDict["name_claude"] = claudeName
         rootDict["antigravity"] = agyDict
-        
+
         let outData = try JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted])
         try outData.write(to: URL(fileURLWithPath: configPath), options: .atomic)
-        
+
         var cardDict: [String: Any] = [:]
         if let cData = try? Data(contentsOf: URL(fileURLWithPath: cardConfigPath)),
            let existing = try? JSONSerialization.jsonObject(with: cData) as? [String: Any] {
@@ -697,7 +697,7 @@ class ConfigState: ObservableObject {
         cardDict["names"] = namesDict
         let cardOut = try JSONSerialization.data(withJSONObject: cardDict, options: [.prettyPrinted])
         try cardOut.write(to: URL(fileURLWithPath: cardConfigPath), options: .atomic)
-        
+
         isSuccess = true
         statusMessage = "✅ 配置与名称已保存！看板已同步更新。"
         onSuccess?()
@@ -706,7 +706,7 @@ class ConfigState: ObservableObject {
             statusMessage = "保存未完成，请检查配置文件权限后重试：\(error.localizedDescription)"
         }
     }
-    
+
     func bindFromChrome(accountId: String, onSuccess: (() -> Void)? = nil) {
         guard !isBusy else { return }
         isBusy = true
@@ -763,20 +763,20 @@ class ConfigState: ObservableObject {
         if cleanId.isEmpty {
             cleanId = "gpt_" + String(Int(Date().timeIntervalSince1970))
         }
-        
+
         if accounts.contains(where: { $0.id == cleanId }) {
             statusMessage = "⚠️ 账号 ID [\(cleanId)] 已存在，请更换"
             isSuccess = false
             return
         }
-        
+
         let authPath: String
         if newType == "token_file" {
             authPath = "~/.swiftbar/tokens/\(cleanId).json"
         } else {
             authPath = "~/.codex/auth.json"
         }
-        
+
         let item = AccountConfigItem(
             id: cleanId,
             name: cleanName,
@@ -786,13 +786,13 @@ class ConfigState: ObservableObject {
             auth_file: authPath,
             auto_sync_chrome: newType == "token_file"
         )
-        
+
         if !newToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             tokenInputs[cleanId] = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        
+
         accounts.append(item)
-        
+
         newName = ""
         newId = ""
         newEmail = ""
@@ -801,7 +801,7 @@ class ConfigState: ObservableObject {
         isSuccess = true
         statusMessage = "✅ 账号已添加！请点击下方「保存并立即刷新」生效。"
     }
-    
+
     func deleteAccount(at index: Int) {
         guard index >= 0 && index < accounts.count else { return }
         let removed = accounts.remove(at: index)
@@ -912,7 +912,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var progressTimer: Timer?
     let vm = CardViewModel()
     let posPath = QuotaPaths.root + "/desktop_card_pos.json"
-    
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         do { try QuotaPaths.prepareDefaults() }
@@ -920,9 +920,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let alert = NSAlert(); alert.messageText = "无法初始化额度看板"
             alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
-        
+
         let initialPos = loadSavedPosition()
-        
+
         let cardView = CardView(
             vm: vm,
             onToggleTopmost: { [weak self] in
@@ -939,9 +939,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onToggleCompact: { [weak self] in self?.toggleCompact() }
         )
-        
+
         let hostingView = DraggableHostingView(rootView: cardView)
-        
+
         window = DraggableWindow(
             contentRect: NSRect(x: initialPos.x, y: initialPos.y, width: 400, height: vm.compact ? (vm.relayVisible ? 470 : 400) : 770),
             styleMask: [.borderless],
@@ -954,10 +954,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = true
         window.isMovable = true
-        
+
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.level = vm.isTopmost ? .floating : .normal
-        
+
         window.makeKeyAndOrderFront(nil)
         configureMenu()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
@@ -967,7 +967,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         vm.loadCaches()
         vm.refresh(manual: true)
-        
+
         // Network requests run once per minute.
         Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.vm.refresh(manual: false)
@@ -977,7 +977,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.vm.now = Date()
         }
     }
-    
+
     func openConfigWindow() {
         if configWindow == nil {
             let configView = ConfigRootView(
@@ -1014,13 +1014,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
             configWindow?.contentView = NSHostingView(rootView: configView)
         }
-        
+
         configWindow?.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         configWindow?.center()
         configWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-    
+
     func toggleTopmost() {
         vm.isTopmost.toggle()
         UserDefaults.standard.set(vm.isTopmost, forKey: "topmost")
@@ -1030,7 +1030,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.level = .normal
         }
     }
-    
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         window.makeKeyAndOrderFront(nil)
         return true
@@ -1077,7 +1077,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return NSPoint(x: 200, y: 300)
     }
-    
+
     func savePosition() {
         let frame = window.frame
         let dict: [String: CGFloat] = ["x": frame.origin.x, "y": frame.origin.y]
@@ -1085,7 +1085,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? data.write(to: URL(fileURLWithPath: posPath))
         }
     }
-    
+
     func applicationWillTerminate(_ notification: Notification) {
         savePosition()
     }
