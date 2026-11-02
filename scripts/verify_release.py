@@ -12,11 +12,14 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / '.build.noindex/AI 桌面卡片.app'
 DIST = ROOT / 'dist'
+VERSION = (ROOT / 'VERSION').read_text().strip()
+STEM = 'AIQuotaDashboard-' + VERSION + '-macOS-universal'
 
 def run(*args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, capture_output=True, text=True, **kwargs).stdout
 
 info = plistlib.loads((APP / 'Contents/Info.plist').read_bytes())
+assert info['CFBundleShortVersionString'] == VERSION
 assert info['CFBundleIconFile'] == 'AppIcon'
 for filename in ['AIDesktopCard', 'ChromeSessionBridge']:
     architectures = run('lipo', '-archs', APP / 'Contents/MacOS' / filename)
@@ -53,7 +56,7 @@ run('codesign', '--verify', '--deep', '--strict', APP)
 for line in (DIST / 'SHA256SUMS.txt').read_text().splitlines():
     digest, name = line.split('  ', 1)
     assert hashlib.sha256((DIST / name).read_bytes()).hexdigest() == digest, name
-pkg = next(DIST.glob('*.pkg'))
+pkg = DIST / (STEM + '.pkg')
 raw_files = run('pkgutil', '--payload-files', pkg).splitlines()
 assert not any('..' in PurePosixPath(p).parts for p in raw_files)
 files = [str(PurePosixPath(p)) for p in raw_files]
@@ -66,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='quota-pkg-') as temp:
     for relative in ['Contents/MacOS/AIDesktopCard', 'Contents/MacOS/ChromeSessionBridge', 'Contents/Resources/AppIcon.icns']:
         assert hashlib.sha256((APP / relative).read_bytes()).digest() == hashlib.sha256((installed / relative).read_bytes()).digest()
     run('codesign', '--verify', '--deep', '--strict', installed)
-dmg = next(DIST.glob('*.dmg'))
+dmg = DIST / (STEM + '.dmg')
 run('hdiutil', 'verify', dmg)
 with tempfile.TemporaryDirectory(prefix='quota-dmg-') as temp:
     mount = Path(temp) / 'mounted'; mount.mkdir()

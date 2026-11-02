@@ -487,7 +487,9 @@ struct CardView: View {
                 Spacer(minLength: 2)
                 Button(action: onToggleCompact) { Image(systemName: vm.compact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left") }.accessibilityLabel(vm.compact ? "展开看板" : "紧凑模式")
                 Button(action: onOpenConfig) { Image(systemName: "slider.horizontal.3") }.accessibilityLabel("看板设置")
-                Button(action: onToggleTopmost) { Image(systemName: vm.isTopmost ? "pin.fill" : "pin") }.accessibilityLabel(vm.isTopmost ? "取消悬浮" : "置顶悬浮")
+                Button(action: onToggleTopmost) { Image(systemName: vm.isTopmost ? "pin.fill" : "pin") }
+                    .accessibilityLabel(vm.isTopmost ? "取消悬浮" : "置顶悬浮")
+                    .help(vm.isTopmost ? "取消置顶，贴在桌面并允许其他应用覆盖" : "置顶悬浮，显示在其他应用上方")
                 Button(action: onClose) { Image(systemName: "xmark") }.accessibilityLabel("隐藏看板")
             }.buttonStyle(.plain).foregroundColor(.white).font(.system(size: 12))
             Text(vm.attention).font(.system(size: 10, weight: .medium)).foregroundColor(vm.lowQuotas.isEmpty && vm.healthy ? .gray : .orange).lineLimit(2)
@@ -887,7 +889,7 @@ struct ConfigRootView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Chrome 需保留已登录的 chatgpt.com 页面；脚本读取依赖现有 Apple 事件 JavaScript 和 macOS 自动化权限。失败时先重新加载页面，再点击重试。")
                             Text("每 60 秒检查；连续失败后按 60、120、240、300 秒重试。手动刷新立即重试。")
-                            Text("关闭看板仅隐藏窗口；菜单栏可再次打开或退出。置顶与紧凑模式会保存。")
+                            Text("未置顶时看板贴在桌面，其他应用可以覆盖；置顶时才悬浮。关闭仅隐藏窗口，菜单栏可再次打开或退出。置顶与紧凑模式会保存。")
                             Button("打开账号配置文件") { NSWorkspace.shared.open(URL(fileURLWithPath: state.configPath)) }
                         }.font(.caption).foregroundColor(.secondary).padding(.top, 8)
                     }
@@ -955,10 +957,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.hasShadow = true
         window.isMovable = true
 
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        window.level = vm.isTopmost ? .floating : .normal
-
-        window.makeKeyAndOrderFront(nil)
+        showDashboard()
         configureMenu()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
         progressTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -1015,7 +1014,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             configWindow?.contentView = NSHostingView(rootView: configView)
         }
 
-        configWindow?.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        applyWindowPresentation()
         configWindow?.center()
         configWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -1024,15 +1023,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func toggleTopmost() {
         vm.isTopmost.toggle()
         UserDefaults.standard.set(vm.isTopmost, forKey: "topmost")
+        applyWindowPresentation()
+    }
+
+    func applyWindowPresentation() {
+        WindowPresentation.apply(pinned: vm.isTopmost, card: window, settings: configWindow)
+    }
+
+    func showDashboard() {
+        applyWindowPresentation()
         if vm.isTopmost {
-            window.level = .floating
+            window.makeKeyAndOrderFront(nil)
         } else {
-            window.level = .normal
+            // Keep the desktop card below normal apps without stealing their focus.
+            window.orderFront(nil)
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        window.makeKeyAndOrderFront(nil)
+        showDashboard()
         return true
     }
     func configureMenu() {
@@ -1046,7 +1055,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func toggleVisibility() {
         if window.isVisible { window.orderOut(nil) }
-        else { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+        else {
+            showDashboard()
+            if vm.isTopmost { NSApp.activate(ignoringOtherApps: true) }
+        }
     }
     @objc func menuRefresh() { vm.refresh(manual: true) }
     @objc func menuSettings() { openConfigWindow() }

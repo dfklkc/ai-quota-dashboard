@@ -4,7 +4,7 @@
 
 ## 下载与安装
 
-在本仓库 [Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest) 下载 `AIQuotaDashboard-1.0.0-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。
+在本仓库 [Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest) 下载 `AIQuotaDashboard-1.0.1-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。
 
 - macOS 14 或更高版本；支持 Apple Silicon 与 Intel。
 - 内置独立 Python 运行时，使用者无需安装 Python、Xcode 或命令行工具。
@@ -29,6 +29,7 @@ LinksAPI 的“未设限 Key”不等于“账户余额无限”：它可以提�
 - 自动每分钟检查；连接失败按 60 / 120 / 240 / 300 秒退避重试。
 - 手动刷新可立即重试；各来源完成后独立显示。
 - 可切换紧凑模式、置顶、低额度阈值。系统通知默认关闭。
+- 未置顶时卡片贴在桌面，其他应用可以覆盖它；只有置顶时才悬浮。设置窗口也跟随置顶状态。
 - 关闭卡片仅隐藏窗口，通过菜单栏重新显示或退出。再次打开应用也会恢复窗口。
 - 首次运行生成默认配置。升级保留已有用户配置、登录凭证与显示偏好。
 
@@ -46,6 +47,7 @@ LinksAPI 的“未设限 Key”不等于“账户余额无限”：它可以提�
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 scripts/test_window_presentation.py
 python3 scripts/build.py
 python3 scripts/verify_release.py
 ```

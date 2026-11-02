@@ -67,7 +67,8 @@ if __name__ == '__main__':
         target = arch + '-apple-macosx14.0'
         print('Compiling:', arch, flush=True)
         run('swiftc', '-O', '-target', target, '-file-prefix-map', str(ROOT) + '=.',
-            BUILD / 'main.swift', ROOT / 'src/AppEnvironment.swift', '-o', BUILD / ('main-' + arch))
+            BUILD / 'main.swift', ROOT / 'src/AppEnvironment.swift', ROOT / 'src/WindowPresentation.swift',
+            '-o', BUILD / ('main-' + arch))
         run('clang', '-O2', '-fobjc-arc', '-target', target, '-ffile-prefix-map=' + str(ROOT) + '=.',
             '-framework', 'Cocoa', '-framework', 'ScriptingBridge', ROOT / 'src/ChromeSessionBridge.m',
             '-o', BUILD / ('bridge-' + arch))
@@ -76,7 +77,7 @@ if __name__ == '__main__':
     info = dict(CFBundleDisplayName='AI 桌面卡片', CFBundleName='AI 桌面卡片',
                 CFBundleExecutable='AIDesktopCard', CFBundleIdentifier='local.ai.quota-dashboard',
                 CFBundlePackageType='APPL', CFBundleShortVersionString=VERSION,
-                CFBundleVersion='100', CFBundleIconFile='AppIcon', LSMinimumSystemVersion='14.0', LSUIElement=True,
+                CFBundleVersion='101', CFBundleIconFile='AppIcon', LSMinimumSystemVersion='14.0', LSUIElement=True,
                 NSHighResolutionCapable=True,
                 NSAppleEventsUsageDescription='读取 Chrome 当前登录的 ChatGPT 会话，用于本地看板查询对应账号的 Codex 使用额度。')
     (APP / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
@@ -100,6 +101,6 @@ if __name__ == '__main__':
                    python_release=manifest['release'], signing='ad-hoc', notarized=False,
                    includes_credentials=False, includes_private_cache=False)
     (DIST / 'release-manifest.json').write_text(json.dumps(release, ensure_ascii=False, indent=2) + '\n')
-    files = sorted([p for p in DIST.iterdir() if p.name != 'SHA256SUMS.txt'])
+    files = [DIST / (stem + '.dmg'), DIST / (stem + '.pkg'), DIST / 'release-manifest.json']
     (DIST / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in files))
     print('Artifacts:', DIST, flush=True)

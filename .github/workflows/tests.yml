@@ -13,3 +13,8 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m unittest discover -s tests -v
+  macos-windows:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/test_window_presentation.py
