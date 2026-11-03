@@ -8,3 +8,21 @@ __pycache__/
 .env*
 *.pem
 *.key
+
+# Local accounts, credentials and generated state never belong in a public repo.
+tokens/
+backups/
+.swiftbar/
+auth.json
+ai_accounts_config.json
+ai_quota_config.json
+card_config.json
+desktop_card_pos.json
+chatgpt_web_token.json
+quota_cache.json
+*_quota.json
+.fetch.lock
+.token_sync.lock
+.quota-*.tmp
+*.p12
+*.pfx

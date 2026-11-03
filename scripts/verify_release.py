@@ -38,7 +38,7 @@ for path in (ROOT / 'src').iterdir():
         source = path.read_text()
         assert not re.search(r'@(gmail\.com|proton\.me)', source), path
         assert not re.search(r'sk-[A-Za-z0-9_-]{24,}', source), path
-        assert '/Users/a1-6' not in source, path
+        assert '/Users/' not in source, path
 with tempfile.TemporaryDirectory(prefix='quota-clean-') as temp:
     env = dict(os.environ, AI_QUOTA_DATA_DIR=temp)
     env.pop('PYTHONHOME', None); env.pop('PYTHONPATH', None)

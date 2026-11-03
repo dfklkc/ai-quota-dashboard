@@ -24,6 +24,16 @@ AGY_CACHE = ROOT / 'antigravity_quota.json'
 USER_AGENT = 'Mozilla/5.0 AIQuotaDashboard/2'
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # A usage query must never forward account credentials to a redirect target.
+        raise urllib.error.HTTPError(req.full_url, code, 'Redirect refused', headers, fp)
+
+
+def open_usage(request, timeout):
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -47,23 +57,58 @@ def atomic_json(path, data):
 
 
 def percent(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    value = finite_number(value)
+    if value is None:
         return None
     return max(0, min(100, int(round(value))))
 
 
+def finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return value if math.isfinite(value) else None
+    except OverflowError:
+        return None
+
+
+def window_minutes(value):
+    seconds = finite_number(value)
+    return seconds / 60 if seconds is not None and 0 < seconds <= 2 ** 63 - 1 else None
+
+
+def nonnegative_integer(value):
+    number = finite_number(value)
+    if number is None or number < 0 or number > 2 ** 63 - 1 or int(number) != number:
+        return None
+    return int(number)
+
+
+def retry_pending(previous):
+    retry_at = finite_number(previous.get('next_retry_at'))
+    if retry_at is None:
+        return False
+    # Corrupt timestamps or a backward clock adjustment must not block a source forever.
+    return 0 < retry_at - time.time() <= 300
+
+
 def quota_window(window, used_key, reset_key, fraction=False):
-    window = window or {}
+    window = window if isinstance(window, dict) else {}
     value = window.get(used_key)
-    p = percent(value * 100 if fraction and isinstance(value, (int, float)) else value)
+    if fraction:
+        value = finite_number(value)
+        value = value * 100 if value is not None else None
+    p = percent(value)
     remaining = p if fraction else (100 - p if p is not None else None)
     ts = window.get(reset_key)
     if isinstance(ts, str):
         try:
             ts = datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
-        except ValueError:
+        except (ValueError, OverflowError, OSError):
             ts = None
-    if not isinstance(ts, (int, float)):
+    ts = finite_number(ts)
+    # Swift converts the reset delta to Int; reject even finite values outside a calendar timestamp.
+    if ts is not None and not 0 < ts <= 253402300799:
         ts = None
     return remaining, (100 - remaining if remaining is not None else None), ts
 
@@ -79,18 +124,25 @@ def sync_chrome_account(cfg):
 
 def apply_usage(result, data):
     limits = data.get('rate_limit') or {}
-    p = limits.get('primary_window') or {}
-    s = limits.get('secondary_window') or {}
+    limits = limits if isinstance(limits, dict) else {}
+    p = limits.get('primary_window')
+    s = limits.get('secondary_window')
+    p = p if isinstance(p, dict) else {}
+    s = s if isinstance(s, dict) else {}
     pr, pu, pt = quota_window(p, 'used_percent', 'reset_at')
     sr, su, st = quota_window(s, 'used_percent', 'reset_at')
     if pr is None and sr is None:
         result['status_msg'] = '接口未提供额度窗口'
         return result
-    result.update(ok=True, connected=True, status_msg='已同步', plan=data.get('plan_type') or '已连接',
+    plan = data.get('plan_type')
+    plan = plan.strip() if isinstance(plan, str) else ''
+    reset_credits = data.get('rate_limit_reset_credits')
+    reset_credits = reset_credits if isinstance(reset_credits, dict) else {}
+    result.update(ok=True, connected=True, status_msg='已同步', plan=plan or '已连接',
                   p_rem=pr, p_used=pu, p_reset_at=pt, s_rem=sr, s_used=su, s_reset_at=st,
-                  p_window_mins=p.get('limit_window_seconds', 0) / 60,
-                  s_window_mins=s.get('limit_window_seconds', 0) / 60,
-                  free_resets=(data.get('rate_limit_reset_credits') or {}).get('available_count'),
+                  p_window_mins=window_minutes(p.get('limit_window_seconds')),
+                  s_window_mins=window_minutes(s.get('limit_window_seconds')),
+                  free_resets=nonnegative_integer(reset_credits.get('available_count')),
                   source='cloud_https', updated_at=now_iso(), last_success_at=now_iso())
     return result
 
@@ -163,7 +215,7 @@ def query_account_quota(cfg, old=None):
         if tokens.get('account_id'):
             headers['ChatGPT-Account-Id'] = tokens['account_id']
         req = urllib.request.Request('https://chatgpt.com/backend-api/wham/usage', headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with open_usage(req, timeout=5) as resp:
             data = json.load(resp)
         return apply_usage(result, data)
     except urllib.error.HTTPError as e:
@@ -178,7 +230,9 @@ def query_account_quota(cfg, old=None):
 
 
 def record_attempt(result, old):
-    failures = 0 if result.get('ok') else int((old or {}).get('failure_count', 0)) + 1
+    old = old if isinstance(old, dict) else {}
+    prior_failures = nonnegative_integer(old.get('failure_count')) or 0
+    failures = 0 if result.get('ok') else min(prior_failures + 1, 2 ** 31 - 1)
     result['failure_count'] = failures
     result['next_retry_at'] = time.time() + min(300, 60 * 2 ** min(failures - 1, 3)) if failures else 0
     return result
@@ -186,17 +240,35 @@ def record_attempt(result, old):
 
 def fetch_all_gpt_accounts(config, force=False, source=None):
     accounts = [a for a in config.get('chatgpt_accounts', []) if a.get('enabled', True)]
-    old = {a['id']: a for a in read_json(GPT_ACCOUNTS_CACHE, []) if isinstance(a, dict) and 'id' in a}
+    if not accounts:
+        return
+    cached = read_json(GPT_ACCOUNTS_CACHE, [])
+    cached = cached if isinstance(cached, list) else []
+    old = {}
+    for item in cached:
+        if not isinstance(item, dict) or 'id' not in item:
+            continue
+        item = dict(item)
+        if item.get('plan') is not None and not isinstance(item['plan'], str):
+            item['plan'] = None
+        if 'free_resets' in item:
+            item['free_resets'] = nonnegative_integer(item['free_resets'])
+        old[item['id']] = item
     results = {a['id']: old[a['id']] for a in accounts if a['id'] in old}
+    last_saved = cached
     def save():
-        atomic_json(GPT_ACCOUNTS_CACHE, [results[a['id']] for a in accounts if a['id'] in results])
+        nonlocal last_saved
+        payload = [results[a['id']] for a in accounts if a['id'] in results]
+        if payload != last_saved:
+            atomic_json(GPT_ACCOUNTS_CACHE, payload)
+            last_saved = payload
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         futures = {}
         for cfg in accounts:
             previous = old.get(cfg['id'], {})
             if source and source != cfg['id']:
                 continue
-            if not force and previous.get('next_retry_at', 0) > time.time():
+            if not force and retry_pending(previous):
                 continue
             futures[pool.submit(query_account_quota, cfg, previous)] = cfg
         for future in concurrent.futures.as_completed(futures):
@@ -260,11 +332,11 @@ def parse_agy_summary(summary, cfg):
 def fetch_antigravity_quota(config, force=False):
     cfg = config.get('antigravity', {})
     if not cfg.get('enabled', True):
-        atomic_json(AGY_CACHE, {'ok': False, 'is_running': False, 'status_msg': '已停用', 'updated_at': now_iso()})
         return
     result = read_json(AGY_CACHE, {})
+    result = result if isinstance(result, dict) else {}
     old = dict(result)
-    if not force and result.get('next_retry_at', 0) > time.time():
+    if not force and retry_pending(result):
         return
     try:
         summary = retrieve_agy_summary()
@@ -286,14 +358,15 @@ def query_linksapi_quota(cfg):
 
 def fetch_linksapi_quota(config, force=False):
     cfg = config.get('linksapi', {})
+    if not cfg.get('enabled', False):
+        return
     path = ROOT / 'linksapi_quota.json'
     old = read_json(path, {})
-    if cfg.get('enabled') and not force and old.get('next_retry_at', 0) > time.time():
+    old = old if isinstance(old, dict) else {}
+    if not force and retry_pending(old):
         return
     result = query_linksapi_quota(cfg)
-    if cfg.get('enabled'):
-        result = record_attempt(result, old)
-    atomic_json(path, result)
+    atomic_json(path, record_attempt(result, old))
 
 
 def main():
@@ -312,11 +385,12 @@ def main():
             raise SystemExit('账号配置无法读取')
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             jobs = []
-            if args.source not in ('antigravity', 'linksapi'):
+            accounts = [a for a in config.get('chatgpt_accounts', []) if a.get('enabled', True)]
+            if args.source not in ('antigravity', 'linksapi') and any(args.source is None or args.source == a.get('id') for a in accounts):
                 jobs.append(pool.submit(fetch_all_gpt_accounts, config, args.force, args.source))
-            if args.source is None or args.source == 'antigravity':
+            if (args.source is None or args.source == 'antigravity') and config.get('antigravity', {}).get('enabled', True):
                 jobs.append(pool.submit(fetch_antigravity_quota, config, args.force))
-            if args.source is None or args.source == 'linksapi':
+            if (args.source is None or args.source == 'linksapi') and config.get('linksapi', {}).get('enabled', False):
                 jobs.append(pool.submit(fetch_linksapi_quota, config, args.force))
             for job in jobs:
                 job.result()

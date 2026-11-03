@@ -20,7 +20,7 @@ class CurrentSessionTests(unittest.TestCase):
     def test_app_switch_uses_actual_identity_and_clears_old_quota(self):
         cfg = {'id': 'app', 'type': 'codex_auth', 'email': 'old@example.com', 'auth_file': 'unused', 'follow_current_session': True}
         old = {'email': 'old@example.com', 'last_success_at': '2026-10-24T00:00:00Z', 'p_rem': 90, 's_rem': 80}
-        with patch.object(q, 'read_json', return_value={'access_token': 'stub', 'email': 'new@example.com'}), patch.object(q.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(USAGE).encode())):
+        with patch.object(q, 'read_json', return_value={'access_token': 'stub', 'email': 'new@example.com'}), patch.object(q, 'open_usage', return_value=io.BytesIO(json.dumps(USAGE).encode())):
             result = q.query_account_quota(cfg, old)
         self.assertTrue(result['ok'])
         self.assertEqual(result['email'], 'new@example.com')
@@ -47,7 +47,7 @@ class CurrentSessionTests(unittest.TestCase):
 
     def test_web_follow_does_not_require_configured_email(self):
         session = {'email': 'current@example.com', 'access_token': 'stub'}
-        with tempfile.TemporaryDirectory() as temp, patch.object(b, 'ROOT', Path(temp)), patch.object(b, 'get_chrome_sessions', return_value=([session], '')), patch.object(b.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(USAGE).encode())):
+        with tempfile.TemporaryDirectory() as temp, patch.object(b, 'ROOT', Path(temp)), patch.object(b, 'get_chrome_sessions', return_value=([session], '')), patch.object(b, 'open_usage', return_value=io.BytesIO(json.dumps(USAGE).encode())):
             result = b.sync_account({'type': 'token_file', 'follow_current_session': True, 'auth_file': str(Path(temp) / 'token.json')})
         self.assertTrue(result['ok'])
         self.assertEqual(result['email'], session['email'])

@@ -3,7 +3,7 @@ import SwiftUI
 import Darwin
 import UserNotifications
 
-struct GPTAccountQuota: Codable, Identifiable {
+struct GPTAccountQuota: Codable, Equatable, Identifiable {
     var id: String
     var name: String?
     var email: String?
@@ -29,7 +29,7 @@ struct GPTAccountQuota: Codable, Identifiable {
     var next_retry_at: Double?
 }
 
-struct AntigravityQuota: Codable {
+struct AntigravityQuota: Codable, Equatable {
     var ok: Bool?
     var is_running: Bool?
     var status_msg: String?
@@ -50,7 +50,7 @@ struct AntigravityQuota: Codable {
     var next_retry_at: Double?
 }
 
-struct LinksAPIQuota: Codable {
+struct LinksAPIQuota: Codable, Equatable {
     var ok: Bool?
     var state: String?
     var status_msg: String?
@@ -96,7 +96,7 @@ func syncLabel(_ raw: String?) -> String {
     return "同步于 " + f.string(from: d)
 }
 func resetLabel(_ ts: Double?, now: Date) -> String {
-    guard let ts = ts else { return "未提供重置时间" }
+    guard let ts = ts, ts.isFinite, ts > 0, ts < 253402300800 else { return "未提供重置时间" }
     let seconds = Int(ts - now.timeIntervalSince1970)
     if seconds <= 0 { return "已到重置时间，等待同步" }
     let f = DateFormatter()
@@ -106,7 +106,7 @@ func resetLabel(_ ts: Double?, now: Date) -> String {
     return "\(f.string(from: date)) · 余\(remain)"
 }
 func windowTitle(_ mins: Double?, fallback: String) -> String {
-    guard let mins = mins, mins > 0 else { return fallback }
+    guard let mins = mins, mins.isFinite, mins > 0, mins < 5256000 else { return fallback }
     if mins >= 1440 { return "\(Int(mins / 1440))天额度" }
     if mins >= 60 { return "\(Int(mins / 60))小时额度" }
     return "\(Int(mins))分钟额度"
@@ -132,6 +132,19 @@ class CardViewModel: ObservableObject {
     private var fetching = false
     private let lock = NSLock()
     let root = QuotaPaths.root
+    var onLayoutChange: (() -> Void)?
+    private let files = FileSnapshots()
+    private var configuration: [String: Any]?
+    private var accountCacheValid = false
+    private lazy var displayActivity = DisplayActivity(
+        onProgress: { [weak self] in self?.loadCaches() },
+        onClock: { [weak self] in self?.now = Date() }
+    )
+    func setDisplayVisible(_ visible: Bool) {
+        displayActivity.setVisible(visible)
+        if visible { loadCaches() }
+    }
+    var hasEnabledSources: Bool { !gptAccounts.isEmpty || agyEnabled || relayEnabled }
 
     var lowQuotas: [(String, String)] {
         let threshold = UserDefaults.standard.object(forKey: "alertThreshold") as? Int ?? 20
@@ -161,6 +174,7 @@ class CardViewModel: ObservableObject {
     }
     var attention: String {
         if !cacheError.isEmpty { return cacheError }
+        if !hasEnabledSources { return "未启用任何来源" }
         var messages = lowQuotas.map { $0.1 }
         let failed = gptAccounts.filter { $0.ok != true || !fresh($0.last_success_at, now: now) }.count
         if failed > 0 { messages.append("\(failed) 个账号待连接") }
@@ -186,14 +200,21 @@ class CardViewModel: ObservableObject {
         UserDefaults.standard.set(Array(sent.suffix(200)), forKey: "sentQuotaAlerts")
     }
     var healthy: Bool {
-        cacheError.isEmpty && (!relayEnabled || (linksapi?.ok == true && linksapi?.remaining_amount != nil && fresh(linksapi?.last_success_at, now: now))) && !gptAccounts.isEmpty && gptAccounts.allSatisfy { $0.ok == true && fresh($0.last_success_at, now: now) } && (!agyEnabled || (agy?.ok == true && fresh(agy?.last_success_at, now: now) && (agy?.gemini_5h_rem != nil || agy?.gemini_weekly_rem != nil) && (agy?.claude_5h_rem != nil || agy?.claude_weekly_rem != nil)))
+        cacheError.isEmpty && hasEnabledSources && (!relayEnabled || (linksapi?.ok == true && linksapi?.remaining_amount != nil && fresh(linksapi?.last_success_at, now: now))) && gptAccounts.allSatisfy { $0.ok == true && fresh($0.last_success_at, now: now) } && (!agyEnabled || (agy?.ok == true && fresh(agy?.last_success_at, now: now) && (agy?.gemini_5h_rem != nil || agy?.gemini_weekly_rem != nil) && (agy?.claude_5h_rem != nil || agy?.claude_weekly_rem != nil)))
     }
     func refresh(manual: Bool = false, source: String? = nil) {
+        loadCaches()
+        guard configuration != nil else { refreshMessage = cacheError; return }
+        guard hasEnabledSources else {
+            refreshMessage = "未启用任何来源 · 已暂停查询"
+            return
+        }
         lock.lock()
         if fetching { lock.unlock(); return }
         fetching = true
         lock.unlock()
         isRefreshing = true
+        displayActivity.setRefreshing(true)
         refreshMessage = "正在查询各来源…"
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
@@ -208,13 +229,7 @@ class CardViewModel: ObservableObject {
             process.standardError = FileHandle.nullDevice
             var message = "本轮查询完成 · 每60秒更新"
             do {
-                try process.run()
-                let deadline = Date().addingTimeInterval(25)
-                while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
-                if process.isRunning {
-                    process.terminate()
-                    Thread.sleep(forTimeInterval: 0.3)
-                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                if try !BoundedProcess.run(process, timeout: 25) {
                     message = "查询超时 · 可点击重试"
                 } else if process.terminationStatus == 75 {
                     message = "另一轮查询进行中，稍后自动更新"
@@ -228,47 +243,69 @@ class CardViewModel: ObservableObject {
                 self.now = Date()
                 self.refreshMessage = message
                 self.isRefreshing = false
+                self.displayActivity.setRefreshing(false)
                 self.lock.lock(); self.fetching = false; self.lock.unlock()
             }
         }
     }
     func loadCaches() {
-        now = Date()
-        cacheError = ""
-        let configURL = URL(fileURLWithPath: root + "/ai_accounts_config.json")
-        let config = (try? Data(contentsOf: configURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        if let cfg = config?["linksapi"] as? [String: Any] {
-            relayVisible = cfg["visible"] as? Bool ?? true
-            relayEnabled = cfg["enabled"] as? Bool ?? false
-            relayName = cfg["name"] as? String ?? "Claude · LinksAPI"
-            relayThreshold = cfg["low_balance_threshold"] as? Double ?? 5
+        let configFile = files.read(root + "/ai_accounts_config.json")
+        if configFile.changed {
+            configuration = configFile.data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         }
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: root + "/linksapi_quota.json")) {
-            linksapi = try? JSONDecoder().decode(LinksAPIQuota.self, from: data)
+        guard let config = configuration else {
+            let error = "账号配置无法读取，请检查配置文件"
+            if cacheError != error { cacheError = error }
+            return
         }
-        if let cfg = config?["antigravity"] as? [String: Any] {
-            agyEnabled = cfg["enabled"] as? Bool ?? true
-            customGeminiName = cfg["name_gemini"] as? String ?? customGeminiName
-            customClaudeName = cfg["name_claude"] as? String ?? customClaudeName
+        var error = ""
+        if configFile.changed {
+            let relay = config["linksapi"] as? [String: Any] ?? [:]
+            let visible = relay["visible"] as? Bool ?? true
+            let enabled = relay["enabled"] as? Bool ?? false
+            let name = relay["name"] as? String ?? "Claude · LinksAPI"
+            let threshold = relay["low_balance_threshold"] as? Double ?? 5
+            if relayVisible != visible { relayVisible = visible; onLayoutChange?() }
+            if relayEnabled != enabled { relayEnabled = enabled }
+            if relayName != name { relayName = name }
+            if relayThreshold != threshold { relayThreshold = threshold }
+            let agyConfig = config["antigravity"] as? [String: Any] ?? [:]
+            let agyOn = agyConfig["enabled"] as? Bool ?? true
+            if agyEnabled != agyOn { agyEnabled = agyOn }
+            let gemini = agyConfig["name_gemini"] as? String ?? "Antigravity · Gemini"
+            let claude = agyConfig["name_claude"] as? String ?? "Antigravity · Claude"
+            if customGeminiName != gemini { customGeminiName = gemini }
+            if customClaudeName != claude { customClaudeName = claude }
         }
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: root + "/gpt_accounts_quota.json")),
-           let accounts = try? JSONDecoder().decode([GPTAccountQuota].self, from: data) {
-            gptAccounts = accounts
-        } else { gptAccounts = []; cacheError = "账号缓存无法读取，请刷新" }
-        // Reflect enabled state and names immediately after a configuration change.
-        if let configs = config?["chatgpt_accounts"] as? [[String: Any]] {
-            gptAccounts = configs.filter { $0["enabled"] as? Bool ?? true }.compactMap { cfg in
+        let relayFile = files.read(root + "/linksapi_quota.json")
+        if relayFile.changed {
+            let value = relayFile.data.flatMap { try? JSONDecoder().decode(LinksAPIQuota.self, from: $0) }
+            if linksapi != value { linksapi = value }
+        }
+        let accountsFile = files.read(root + "/gpt_accounts_quota.json")
+        let configs = (config["chatgpt_accounts"] as? [[String: Any]] ?? []).filter { $0["enabled"] as? Bool ?? true }
+        if accountsFile.changed || configFile.changed {
+            let decoded = accountsFile.data.flatMap { try? JSONDecoder().decode([GPTAccountQuota].self, from: $0) }
+            accountCacheValid = decoded != nil
+            let accounts = decoded ?? []
+            let values = configs.compactMap { cfg -> GPTAccountQuota? in
                 guard let id = cfg["id"] as? String else { return nil }
-                var a = gptAccounts.first { $0.id == id } ?? GPTAccountQuota(id: id)
-                a.name = cfg["name"] as? String
-                if cfg["follow_current_session"] as? Bool != true { a.email = cfg["email"] as? String }
-                return a
+                var account = accounts.first { $0.id == id } ?? GPTAccountQuota(id: id)
+                account.name = cfg["name"] as? String
+                if cfg["follow_current_session"] as? Bool != true { account.email = cfg["email"] as? String }
+                return account
             }
+            if gptAccounts != values { gptAccounts = values }
         }
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: root + "/antigravity_quota.json")) {
-            agy = try? JSONDecoder().decode(AntigravityQuota.self, from: data)
-        } else { agy = nil }
+        if !configs.isEmpty && !accountCacheValid { error = "账号缓存无法读取，请刷新" }
+        let agyFile = files.read(root + "/antigravity_quota.json")
+        if agyFile.changed {
+            let value = agyFile.data.flatMap { try? JSONDecoder().decode(AntigravityQuota.self, from: $0) }
+            if agy != value { agy = value }
+        }
+        if cacheError != error { cacheError = error }
     }
+
 }
 
 class DraggableWindow: NSWindow {
@@ -482,7 +519,7 @@ struct CardView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: "line.3.horizontal").foregroundColor(.gray).help("拖动标题区域移动看板")
-                Circle().fill(vm.healthy ? Color.green : Color.orange).frame(width: 7, height: 7)
+                Circle().fill(!vm.hasEnabledSources ? Color.gray : vm.healthy ? Color.green : Color.orange).frame(width: 7, height: 7)
                 Text("AI 综合额度看板").font(.system(size: 13, weight: .bold))
                 Spacer(minLength: 2)
                 Button(action: onToggleCompact) { Image(systemName: vm.compact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left") }.accessibilityLabel(vm.compact ? "展开看板" : "紧凑模式")
@@ -495,7 +532,8 @@ struct CardView: View {
             Text(vm.attention).font(.system(size: 10, weight: .medium)).foregroundColor(vm.lowQuotas.isEmpty && vm.healthy ? .gray : .orange).lineLimit(2)
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text("GPT · Codex 使用额度").font(.system(size: 11, weight: .semibold)).foregroundColor(.cyan)
+                    if !vm.gptAccounts.isEmpty { Text("GPT · Codex 使用额度").font(.system(size: 11, weight: .semibold)).foregroundColor(.cyan) }
+                    if !vm.hasEnabledSources { Text("在设置中启用需要的来源").font(.system(size: 11)).foregroundColor(.gray).padding(.vertical, 12) }
                     ForEach(vm.gptAccounts) { acc in
                         if vm.compact {
                             CompactQuotaRow(name: acc.name ?? acc.id, detail: acc.ok == true ? (acc.email ?? "") : (acc.status_msg ?? "待连接"), short: acc.p_rem, long: acc.s_rem, valid: acc.ok == true && fresh(acc.last_success_at, now: vm.now))
@@ -534,7 +572,6 @@ class ConfigState: ObservableObject {
     @Published var accounts: [AccountConfigItem] = []
     @Published var geminiName: String = "Antigravity · Gemini"
     @Published var claudeName: String = "Antigravity · Claude"
-    @Published var agyEmail: String = ""
     @Published var relayEnabled = false
     @Published var relayVisible = true
     @Published var relayName = "Claude · LinksAPI"
@@ -545,30 +582,25 @@ class ConfigState: ObservableObject {
     @Published var relayThreshold = 5.0
     @Published var agyEnabled: Bool = true
 
-    @Published var tokenInputs: [String: String] = [:]
-    @Published var expandedTokenAccounts: Set<String> = []
-
-    @Published var isAddingNew: Bool = false
-    @Published var newName: String = ""
-    @Published var newId: String = ""
-    @Published var newEmail: String = ""
-    @Published var newType: String = "token_file"
-    @Published var newToken: String = ""
-
     @Published var statusMessage: String? = nil
     @Published var isSuccess: Bool = false
     @Published var isBusy: Bool = false
 
+    private var configurationLoaded = false
     let configPath = QuotaPaths.root + "/ai_accounts_config.json"
     let cardConfigPath = QuotaPaths.root + "/card_config.json"
     let tokensDir = QuotaPaths.root + "/tokens"
     let bindScriptPath = QuotaPaths.script("bind_account.py")
 
     func load() {
+        configurationLoaded = false
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            isSuccess = false
+            statusMessage = "账号配置无法读取，未修改文件；请先恢复有效配置"
             return
         }
+        configurationLoaded = true
 
         if let list = dict["chatgpt_accounts"] as? [[String: Any]] {
             var parsed: [AccountConfigItem] = []
@@ -599,7 +631,6 @@ class ConfigState: ObservableObject {
         }
         if let agy = dict["antigravity"] as? [String: Any] {
             self.agyEnabled = agy["enabled"] as? Bool ?? true
-            self.agyEmail = agy["email"] as? String ?? ""
             self.geminiName = agy["name_gemini"] as? String ?? "Antigravity · Gemini"
             self.claudeName = agy["name_claude"] as? String ?? "Antigravity · Claude"
         }
@@ -614,11 +645,12 @@ class ConfigState: ObservableObject {
 
     func save(onSuccess: (() -> Void)? = nil) {
         do {
-        var rootDict: [String: Any] = [:]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            rootDict = existing
+        guard configurationLoaded,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+              let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "Configuration", code: 1, userInfo: [NSLocalizedDescriptionKey: "账号配置无法读取，未覆盖原文件"])
         }
+        var rootDict = existing
 
         var relayCfg = rootDict["linksapi"] as? [String: Any] ?? [:]
         relayCfg["enabled"] = relayEnabled; relayCfg["visible"] = relayVisible
@@ -630,7 +662,7 @@ class ConfigState: ObservableObject {
         var credentials: [String: Any] = [:]
         if let data = try? Data(contentsOf: credentialURL), let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { credentials = saved }
         let cleanKey = relayKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanKey.isEmpty || (!relayUserId.isEmpty && relayUserId != credentials["user_id"] as? String) {
+        if !cleanKey.isEmpty || (relayUserId.trimmingCharacters(in: .whitespacesAndNewlines) != (credentials["user_id"] as? String ?? "")) {
             if cleanKey.contains(where: { $0.isWhitespace }) { throw NSError(domain: "LinksAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: "查询凭证含有空格或换行，请重新粘贴"]) }
             if !cleanKey.isEmpty { credentials[relayMode == "account" ? "access_token" : "api_key"] = cleanKey }
             credentials["user_id"] = relayUserId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -643,8 +675,10 @@ class ConfigState: ObservableObject {
             relayKey = ""
         }
         var accList: [[String: Any]] = []
+        let existingAccounts = rootDict["chatgpt_accounts"] as? [[String: Any]] ?? []
         for acc in accounts {
-            let item: [String: Any] = [
+            var item = existingAccounts.first { $0["id"] as? String == acc.id } ?? [:]
+            item.merge([
                 "id": acc.id,
                 "name": acc.name,
                 "email": acc.email,
@@ -653,28 +687,15 @@ class ConfigState: ObservableObject {
                 "auth_file": acc.auth_file,
                 "auto_sync_chrome": acc.auto_sync_chrome,
                 "follow_current_session": acc.follow_current_session
-            ]
+            ], uniquingKeysWith: { _, new in new })
             accList.append(item)
 
-            if acc.type == "token_file", !acc.follow_current_session, let token = tokenInputs[acc.id], !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let expandedPath = NSString(string: acc.auth_file).expandingTildeInPath
-                let dir = (expandedPath as NSString).deletingLastPathComponent
-                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
 
-                let tokenDict: [String: Any] = [
-                    "access_token": token.trimmingCharacters(in: .whitespacesAndNewlines),
-                    "email": acc.email
-                ]
-                let tdata = try JSONSerialization.data(withJSONObject: tokenDict, options: [.prettyPrinted])
-                try tdata.write(to: URL(fileURLWithPath: expandedPath), options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: expandedPath)
-            }
         }
         rootDict["chatgpt_accounts"] = accList
 
         var agyDict: [String: Any] = rootDict["antigravity"] as? [String: Any] ?? [:]
         agyDict["enabled"] = agyEnabled
-        agyDict["email"] = agyEmail
         agyDict["name_gemini"] = geminiName
         agyDict["name_claude"] = claudeName
         rootDict["antigravity"] = agyDict
@@ -682,23 +703,6 @@ class ConfigState: ObservableObject {
         let outData = try JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted])
         try outData.write(to: URL(fileURLWithPath: configPath), options: .atomic)
 
-        var cardDict: [String: Any] = [:]
-        if let cData = try? Data(contentsOf: URL(fileURLWithPath: cardConfigPath)),
-           let existing = try? JSONSerialization.jsonObject(with: cData) as? [String: Any] {
-            cardDict = existing
-        }
-        var namesDict = cardDict["names"] as? [String: String] ?? [:]
-        namesDict["antigravity_gemini"] = geminiName
-        namesDict["antigravity_claude"] = claudeName
-        if let firstApp = accounts.first(where: { $0.type == "codex_auth" }) {
-            namesDict["gpt_app"] = firstApp.name
-        }
-        if let firstWeb = accounts.first(where: { $0.type == "token_file" }) {
-            namesDict["gpt_web"] = firstWeb.name
-        }
-        cardDict["names"] = namesDict
-        let cardOut = try JSONSerialization.data(withJSONObject: cardDict, options: [.prettyPrinted])
-        try cardOut.write(to: URL(fileURLWithPath: cardConfigPath), options: .atomic)
 
         isSuccess = true
         statusMessage = "✅ 配置与名称已保存！看板已同步更新。"
@@ -724,13 +728,7 @@ class ConfigState: ObservableObject {
             proc.standardOutput = pipe
             proc.standardError = FileHandle.nullDevice
             do {
-                try proc.run()
-                let deadline = Date().addingTimeInterval(20)
-                while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
-                if proc.isRunning {
-                    proc.terminate()
-                    Thread.sleep(forTimeInterval: 0.2)
-                    if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+                if try !BoundedProcess.run(proc, timeout: 20) {
                     DispatchQueue.main.async {
                         self.isBusy = false
                         self.statusMessage = "读取 Chrome 超时，请重新加载 ChatGPT 页面后重试"
@@ -754,62 +752,7 @@ class ConfigState: ObservableObject {
         }
     }
 
-    func addNewAccount() {
-        let cleanName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        var cleanId = newId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleanName.isEmpty {
-            statusMessage = "⚠️ 请输入账号名称"
-            isSuccess = false
-            return
-        }
-        if cleanId.isEmpty {
-            cleanId = "gpt_" + String(Int(Date().timeIntervalSince1970))
-        }
 
-        if accounts.contains(where: { $0.id == cleanId }) {
-            statusMessage = "⚠️ 账号 ID [\(cleanId)] 已存在，请更换"
-            isSuccess = false
-            return
-        }
-
-        let authPath: String
-        if newType == "token_file" {
-            authPath = "~/.swiftbar/tokens/\(cleanId).json"
-        } else {
-            authPath = "~/.codex/auth.json"
-        }
-
-        let item = AccountConfigItem(
-            id: cleanId,
-            name: cleanName,
-            email: newEmail.trimmingCharacters(in: .whitespacesAndNewlines),
-            enabled: true,
-            type: newType,
-            auth_file: authPath,
-            auto_sync_chrome: newType == "token_file"
-        )
-
-        if !newToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            tokenInputs[cleanId] = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        accounts.append(item)
-
-        newName = ""
-        newId = ""
-        newEmail = ""
-        newToken = ""
-        isAddingNew = false
-        isSuccess = true
-        statusMessage = "✅ 账号已添加！请点击下方「保存并立即刷新」生效。"
-    }
-
-    func deleteAccount(at index: Int) {
-        guard index >= 0 && index < accounts.count else { return }
-        let removed = accounts.remove(at: index)
-        statusMessage = "已移除账号: \(removed.name)，点击「保存」生效"
-        isSuccess = false
-    }
 }
 
 // MARK: - Dedicated Frontend Config Root View
@@ -911,7 +854,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: DraggableWindow!
     var configWindow: NSWindow?
     var statusItem: NSStatusItem?
-    var progressTimer: Timer?
+    var networkTimer: Timer?
+    var positionSaveTask: DispatchWorkItem?
     let vm = CardViewModel()
     let posPath = QuotaPaths.root + "/desktop_card_pos.json"
 
@@ -923,6 +867,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = error.localizedDescription; alert.runModal(); NSApp.terminate(nil); return
         }
 
+        vm.loadCaches()
         let initialPos = loadSavedPosition()
 
         let cardView = CardView(
@@ -932,6 +877,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onClose: {
                 self.window.orderOut(nil)
+                self.updateDisplayVisibility()
             },
             onRefreshTrigger: { [weak self] in
                 self?.vm.refresh(manual: true)
@@ -956,25 +902,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.hasShadow = true
         window.isMovable = true
+        vm.onLayoutChange = { [weak self] in self?.resizeDashboard() }
 
         showDashboard()
         configureMenu()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.vm.isRefreshing { self.vm.loadCaches() }
-        }
-        vm.loadCaches()
+        NotificationCenter.default.addObserver(self, selector: #selector(displayVisibilityChanged), name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowMoved), name: NSWindow.didMoveNotification, object: window)
+        updateDisplayVisibility()
         vm.refresh(manual: true)
-
-        // Network requests run once per minute.
-        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+        networkTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.vm.refresh(manual: false)
-            self?.savePosition()
         }
-        Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
-            self?.vm.now = Date()
-        }
+        networkTimer?.tolerance = 5
+
+    }
+
+    @objc func displayVisibilityChanged() { updateDisplayVisibility() }
+    func updateDisplayVisibility() {
+        vm.setDisplayVisible(window.isVisible && window.occlusionState.contains(.visible))
+    }
+    @objc func windowMoved() {
+        positionSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.savePosition() }
+        positionSaveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
     }
 
     func openConfigWindow() {
@@ -1038,6 +990,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Keep the desktop card below normal apps without stealing their focus.
             window.orderFront(nil)
         }
+        updateDisplayVisibility()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -1054,7 +1007,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
     @objc func toggleVisibility() {
-        if window.isVisible { window.orderOut(nil) }
+        if window.isVisible { window.orderOut(nil); updateDisplayVisibility() }
         else {
             showDashboard()
             if vm.isTopmost { NSApp.activate(ignoringOtherApps: true) }
@@ -1063,12 +1016,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func menuRefresh() { vm.refresh(manual: true) }
     @objc func menuSettings() { openConfigWindow() }
     @objc func quit() { NSApp.terminate(nil) }
-    @objc func didWake() { vm.loadCaches(); vm.refresh(manual: true) }
+    @objc func didWake() { vm.now = Date(); vm.refresh(manual: true) }
     @objc func toggleCompact() {
-        let top = window.frame.maxY
         vm.compact.toggle()
         UserDefaults.standard.set(vm.compact, forKey: "compact")
+        resizeDashboard()
+    }
+    func resizeDashboard() {
         let height: CGFloat = vm.compact ? (vm.relayVisible ? 470 : 400) : 770
+        guard window.frame.height != height else { return }
+        let top = window.frame.maxY
         window.setContentSize(NSSize(width: 400, height: height))
         let screen = window.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
         window.setFrameOrigin(NSPoint(x: window.frame.minX, y: max(screen.minY, min(top - height, screen.maxY - height))))
@@ -1093,12 +1050,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func savePosition() {
         let frame = window.frame
         let dict: [String: CGFloat] = ["x": frame.origin.x, "y": frame.origin.y]
-        if let data = try? JSONSerialization.data(withJSONObject: dict) {
-            try? data.write(to: URL(fileURLWithPath: posPath))
+        if let data = try? JSONSerialization.data(withJSONObject: dict, options: .sortedKeys) {
+            let url = URL(fileURLWithPath: posPath)
+            if (try? Data(contentsOf: url)) != data { try? data.write(to: url, options: .atomic) }
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        networkTimer?.invalidate()
+        positionSaveTask?.cancel()
+        vm.setDisplayVisible(false)
         savePosition()
     }
 }

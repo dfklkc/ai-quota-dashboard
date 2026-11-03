@@ -34,7 +34,8 @@ static NSString *errorCode(NSError *error) {
 }
 int main(int argc,const char *argv[]) {
  @autoreleasepool {
-    if(argc!=3){emit(@{@"code":@"browser_error"});return 1;}
+    BOOL firstSession=argc==4&&strcmp(argv[3],"--first-session")==0;
+    if(argc!=3&&!firstSession){emit(@{@"code":@"browser_error"});return 1;}
     NSString *start=@(argv[1]),*poll=@(argv[2]);
     BOOL running=NO,found=NO;
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:8];
@@ -70,7 +71,10 @@ int main(int argc,const char *argv[]) {
               if([session isKindOfClass:NSDictionary.class]&&![session[@"code"] isEqual:@"pending"]){
                 NSMutableDictionary *out=[session mutableCopy];
                 out[@"source_label"]=[NSString stringWithFormat:@"Chrome 窗口 %ld · 标签 %ld%@",(long)[win index],number.integerValue+1,number.integerValue==active?@"（活动）":@"（后台）"];
-                emit(out);delivered=YES;break;
+                emit(out);delivered=YES;
+                // Follow mode needs only the prioritized account, not every background tab.
+                if(firstSession&&[out[@"access_token"] isKindOfClass:NSString.class]&&[out[@"access_token"] length]>0)return 0;
+                break;
               }
               [NSThread sleepForTimeInterval:0.1];
             }

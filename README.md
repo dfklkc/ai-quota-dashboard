@@ -4,7 +4,7 @@
 
 ## 下载与安装
 
-在本仓库 [Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest) 下载 `AIQuotaDashboard-1.0.1-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。
+在本仓库 [Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest) 下载 `AIQuotaDashboard-1.0.2-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。
 
 - macOS 14 或更高版本；支持 Apple Silicon 与 Intel。
 - 内置独立 Python 运行时，使用者无需安装 Python、Xcode 或命令行工具。
@@ -28,6 +28,8 @@ LinksAPI 的“未设限 Key”不等于“账户余额无限”：它可以提�
 
 - 自动每分钟检查；连接失败按 60 / 120 / 240 / 300 秒退避重试。
 - 手动刷新可立即重试；各来源完成后独立显示。
+- 查询进度只在刷新且卡片可见时更新，隐藏或被完全遮挡时暂停界面定时器；全部来源停用时不启动查询进程。
+- Chrome 跟随模式取得首个优先会话后停止读取，减少无用的后台标签请求。
 - 可切换紧凑模式、置顶、低额度阈值。系统通知默认关闭。
 - 未置顶时卡片贴在桌面，其他应用可以覆盖它；只有置顶时才悬浮。设置窗口也跟随置顶状态。
 - 关闭卡片仅隐藏窗口，通过菜单栏重新显示或退出。再次打开应用也会恢复窗口。
@@ -48,6 +50,8 @@ LinksAPI 的“未设限 Key”不等于“账户余额无限”：它可以提�
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/test_window_presentation.py
+python3 scripts/test_display_activity.py
+python3 scripts/check_public_content.py --history
 python3 scripts/build.py
 python3 scripts/verify_release.py
 ```
@@ -72,3 +76,7 @@ AI_QUOTA_DATA_DIR="$(mktemp -d)" ".build.noindex/AI 桌面卡片.app/Contents/Ma
 - `tests/`：额度、账号切换、隐私和接口异常回归检查。
 
 第三方运行时许可说明见 `docs/THIRD_PARTY.txt`，完整许可随运行时保留在应用包中。
+
+## 公开维护
+
+代码、默认配置、构建脚本、验证检查和发行安装包在本仓库公开。后续优化在本地及 CI 验证后提交并推送；涉及应用行为的改动同步更新 Release。项目不会把真实账号配置、登录凭证或本机额度缓存加入 Git。公开内容检查同时覆盖当前文件与历史版本。

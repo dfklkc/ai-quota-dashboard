@@ -30,7 +30,7 @@ class QuotaTests(unittest.TestCase):
     def test_expired_login_never_becomes_connected(self):
         cfg={'id':'test','email':'a@example.com','auth_file':'unused'}
         err=urllib.error.HTTPError('https://chatgpt.com',401,'Unauthorized',{},None)
-        with patch.object(m,'read_json',return_value={'access_token':'fake'}), patch.object(m.urllib.request,'urlopen',side_effect=err):
+        with patch.object(m,'read_json',return_value={'access_token':'fake'}), patch.object(m, 'open_usage',side_effect=err):
             d=m.query_account_quota(cfg,{'p_rem':92,'free_resets':2})
         self.assertFalse(d['ok']); self.assertFalse(d['connected'])
         self.assertIsNone(d['p_rem']); self.assertIsNone(d['free_resets'])
@@ -42,13 +42,13 @@ class QuotaTests(unittest.TestCase):
         self.assertFalse(d['ok']); self.assertEqual(d['last_success_at'],old['last_success_at'])
         self.assertEqual(d['p_rem'],42)
     def test_account_mismatch_stops_request(self):
-        with patch.object(m,'read_json',return_value={'access_token':'fake','email':'b@example.com'}), patch.object(m.urllib.request,'urlopen') as req:
+        with patch.object(m,'read_json',return_value={'access_token':'fake','email':'b@example.com'}), patch.object(m, 'open_usage') as req:
             d=m.query_account_quota({'id':'test','email':'a@example.com','auth_file':'unused'})
         req.assert_not_called(); self.assertFalse(d['ok']); self.assertIn('不一致',d['status_msg'])
     def test_success_does_not_invent_secondary_usage(self):
         data={'plan_type':'team','rate_limit':{'primary_window':{'used_percent':21,'limit_window_seconds':18000,'reset_at':1792419720}}}
         response=io.BytesIO(json.dumps(data).encode())
-        with patch.object(m,'read_json',return_value={'access_token':'fake'}),patch.object(m.urllib.request,'urlopen',return_value=response):
+        with patch.object(m,'read_json',return_value={'access_token':'fake'}),patch.object(m, 'open_usage',return_value=response):
             d=m.query_account_quota({'id':'test','auth_file':'unused'})
         self.assertTrue(d['ok']);self.assertEqual(d['p_rem'],79);self.assertIsNone(d['s_rem']); self.assertEqual(d['p_window_mins'],300)
     def test_disabled_accounts_removed_and_failures_kept_in_order(self):

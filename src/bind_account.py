@@ -3,6 +3,7 @@
 import base64
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -17,6 +18,15 @@ from datetime import datetime, timezone
 ROOT = Path(os.environ.get('AI_QUOTA_DATA_DIR', str(Path.home() / '.swiftbar')))
 CONFIG_FILE = ROOT / 'ai_accounts_config.json'
 LAST_BROWSER_ERROR = ''
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, 'Redirect refused', headers, fp)
+
+
+def open_usage(request, timeout):
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
 
 MESSAGES = {
     'chrome_closed': 'Chrome 未运行，请打开并登录目标 ChatGPT 账号',
@@ -54,12 +64,15 @@ window[k]={pending:true};setTimeout(()=>delete window[k],10000);fetch("/api/auth
     return tuple(s.replace("__localQuotaSessionV4", key) for s in (start_js, poll_js))
 
 
-def get_chrome_sessions():
+def get_chrome_sessions(first_session=False):
     global LAST_BROWSER_ERROR
     LAST_BROWSER_ERROR = ''
     try:
         helper = Path(os.environ.get('AI_QUOTA_APP_BUNDLE', str(ROOT / 'AIQuotaDashboard.app'))) / 'Contents/MacOS/ChromeSessionBridge'
-        p = subprocess.run([str(helper), *session_scripts()], capture_output=True, text=True, timeout=11)
+        arguments = [str(helper), *session_scripts()]
+        if first_session:
+            arguments.append('--first-session')
+        p = subprocess.run(arguments, capture_output=True, text=True, timeout=11)
     except subprocess.TimeoutExpired as exc:
         # A later slow tab must not discard an earlier successful session.
         output = exc.stdout or b''
@@ -115,10 +128,13 @@ def validate_session(session, expected):
         headers['ChatGPT-Account-Id'] = account_id
     try:
         req = urllib.request.Request('https://chatgpt.com/backend-api/wham/usage', headers=headers)
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with open_usage(req, timeout=4) as resp:
             usage = json.load(resp)
         windows = usage.get('rate_limit') or {}
-        if not any(isinstance((windows.get(k) or {}).get('used_percent'), (int, float)) for k in ['primary_window', 'secondary_window']):
+        def valid_usage(window):
+            value = window.get('used_percent') if isinstance(window, dict) else None
+            return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if not isinstance(windows, dict) or not any(valid_usage(windows.get(k)) for k in ['primary_window', 'secondary_window']):
             return result('validation_failed')
     except urllib.error.HTTPError as e:
         return result('validation_failed', message='网页登录凭证查询额度返回 HTTP %s，未覆盖原凭证' % e.code)
@@ -156,7 +172,7 @@ def sync_account(cfg):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return result('busy')
-            sessions, error = get_chrome_sessions()
+            sessions, error = get_chrome_sessions(first_session=follow)
             if not sessions:
                 return result(error, message=MESSAGES.get(error, error) + LAST_BROWSER_ERROR)
             candidates = sessions if follow else [s for s in sessions if s.get('email', '').strip().lower() == cfg['email'].strip().lower()]
