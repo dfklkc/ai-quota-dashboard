@@ -26,3 +26,8 @@ quota_cache.json
 .quota-*.tmp
 *.p12
 *.pfx
+
+# CC Switch configuration and derived private usage aggregates
+.cc-switch/
+cc-switch.db*
+ccswitch_analysis.json

@@ -50,6 +50,32 @@ struct AntigravityQuota: Codable, Equatable {
     var next_retry_at: Double?
 }
 
+struct UsagePeriod: Codable, Equatable {
+    var requests: Int?
+    var tokens: Int?
+    var amount: Double?
+}
+struct UsageModel: Codable, Equatable {
+    var name: String
+    var requests: Int
+}
+struct RelayAnalysis: Codable, Equatable {
+    var available: Bool?
+    var source: String?
+    var unit: String?
+    var message: String?
+    var sample_count: Int?
+    var sampled: Bool?
+    var today: UsagePeriod?
+    var week: UsagePeriod?
+    var models: [UsageModel]?
+}
+func relaySiteURL(_ raw: String?) -> URL? {
+    guard let raw = raw, let url = URL(string: raw), url.scheme == "https", url.host != nil,
+          url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
+    return url
+}
+
 struct LinksAPIQuota: Codable, Equatable {
     var ok: Bool?
     var state: String?
@@ -63,6 +89,12 @@ struct LinksAPIQuota: Codable, Equatable {
     var amount_unit: String?
     var expires_at: Double?
     var claude_allowed: Bool?
+    var provider_name: String?
+    var provider_app: String?
+    var provider_origin: String?
+    var dashboard_url: String?
+    var source_label: String?
+    var analysis: RelayAnalysis?
     var last_success_at: String?
 }
 func relayAmount(_ value: Double?, unit: String?) -> String {
@@ -85,9 +117,12 @@ func syncDate(_ raw: String?) -> Date? {
     guard let raw = raw else { return nil }
     return ISO8601DateFormatter().date(from: raw)
 }
-func fresh(_ raw: String?, now: Date) -> Bool {
+func fresh(_ raw: String?, now: Date, maxAge: TimeInterval = 180) -> Bool {
     guard let d = syncDate(raw) else { return false }
-    return now.timeIntervalSince(d) < 180 && now.timeIntervalSince(d) >= -60
+    return now.timeIntervalSince(d) < maxAge && now.timeIntervalSince(d) >= -60
+}
+func relayFresh(_ value: LinksAPIQuota?, now: Date) -> Bool {
+    fresh(value?.last_success_at, now: now, maxAge: value?.source_label == "CC Switch 当前提供商" ? 420 : 180)
 }
 func syncLabel(_ raw: String?) -> String {
     guard let d = syncDate(raw) else { return "尚无有效同步记录" }
@@ -119,7 +154,7 @@ class CardViewModel: ObservableObject {
     @Published var relayVisible = true
     @Published var relayEnabled = false
     @Published var relayThreshold = 5.0
-    @Published var relayName = "Claude · LinksAPI"
+    @Published var relayName = "API · CC Switch"
     @Published var agyEnabled = true
     @Published var customGeminiName = "Antigravity · Gemini"
     @Published var customClaudeName = "Antigravity · Claude"
@@ -166,9 +201,9 @@ class CardViewModel: ObservableObject {
             add("Claude 短周期", a.claude_5h_rem, "claude5h", a.claude_5h_reset_at)
             add("Claude 周额度", a.claude_weekly_rem, "claudeWeek", a.claude_weekly_reset_at)
         }
-        if relayEnabled, let r = linksapi, r.ok == true, fresh(r.last_success_at, now: now),
+        if relayEnabled, let r = linksapi, r.ok == true, relayFresh(r, now: now),
            r.amount_unit == "站内 USD", let balance = r.remaining_amount, balance <= relayThreshold {
-            values.append(("linksapi:" + (r.token_name ?? "") + ":" + String(r.granted_amount ?? 0) + ":" + String(relayThreshold), "LinksAPI 剩余 " + relayAmount(balance, unit: r.amount_unit)))
+            values.append(("linksapi:" + (r.token_name ?? "") + ":" + String(r.granted_amount ?? 0) + ":" + String(relayThreshold), relayName + " 剩余 " + relayAmount(balance, unit: r.amount_unit)))
         }
         return values
     }
@@ -183,8 +218,8 @@ class CardViewModel: ObservableObject {
             if a.gemini_5h_rem == nil && a.gemini_weekly_rem == nil { messages.append("Gemini 未提供额度") }
             if a.claude_5h_rem == nil && a.claude_weekly_rem == nil { messages.append("Claude 未提供额度") }
         }
-        if relayEnabled && (linksapi?.ok != true || !fresh(linksapi?.last_success_at, now: now)) { messages.append("LinksAPI 待连接") }
-        else if relayEnabled && linksapi?.remaining_amount == nil { messages.append("LinksAPI 账户余额待配置") }
+        if relayEnabled && (linksapi?.ok != true || !relayFresh(linksapi, now: now)) { messages.append(relayName + " 待连接") }
+        else if relayEnabled && linksapi?.remaining_amount == nil && linksapi?.used_amount == nil { messages.append(relayName + " 未提供用量") }
         return messages.isEmpty ? "各来源额度已同步" : messages.joined(separator: " · ")
     }
     func notifyLowQuotas() {
@@ -200,7 +235,7 @@ class CardViewModel: ObservableObject {
         UserDefaults.standard.set(Array(sent.suffix(200)), forKey: "sentQuotaAlerts")
     }
     var healthy: Bool {
-        cacheError.isEmpty && hasEnabledSources && (!relayEnabled || (linksapi?.ok == true && linksapi?.remaining_amount != nil && fresh(linksapi?.last_success_at, now: now))) && gptAccounts.allSatisfy { $0.ok == true && fresh($0.last_success_at, now: now) } && (!agyEnabled || (agy?.ok == true && fresh(agy?.last_success_at, now: now) && (agy?.gemini_5h_rem != nil || agy?.gemini_weekly_rem != nil) && (agy?.claude_5h_rem != nil || agy?.claude_weekly_rem != nil)))
+        cacheError.isEmpty && hasEnabledSources && (!relayEnabled || (linksapi?.ok == true && (linksapi?.remaining_amount != nil || linksapi?.used_amount != nil) && relayFresh(linksapi, now: now))) && gptAccounts.allSatisfy { $0.ok == true && fresh($0.last_success_at, now: now) } && (!agyEnabled || (agy?.ok == true && fresh(agy?.last_success_at, now: now) && (agy?.gemini_5h_rem != nil || agy?.gemini_weekly_rem != nil) && (agy?.claude_5h_rem != nil || agy?.claude_weekly_rem != nil)))
     }
     func refresh(manual: Bool = false, source: String? = nil) {
         loadCaches()
@@ -227,7 +262,7 @@ class CardViewModel: ObservableObject {
             process.arguments = args
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
-            var message = "本轮查询完成 · 每60秒更新"
+            var message = "本轮查询完成 · 每60秒检查来源"
             do {
                 if try !BoundedProcess.run(process, timeout: 25) {
                     message = "查询超时 · 可点击重试"
@@ -263,7 +298,7 @@ class CardViewModel: ObservableObject {
             let relay = config["linksapi"] as? [String: Any] ?? [:]
             let visible = relay["visible"] as? Bool ?? true
             let enabled = relay["enabled"] as? Bool ?? false
-            let name = relay["name"] as? String ?? "Claude · LinksAPI"
+            let name = relay["name"] as? String ?? "API · CC Switch"
             let threshold = relay["low_balance_threshold"] as? Double ?? 5
             if relayVisible != visible { relayVisible = visible; onLayoutChange?() }
             if relayEnabled != enabled { relayEnabled = enabled }
@@ -449,7 +484,7 @@ struct LinksAPICardView: View {
     var now: Date
     var onSettings: () -> Void
     var onRetry: () -> Void
-    var valid: Bool { enabled && data?.ok == true && fresh(data?.last_success_at, now: now) }
+    var valid: Bool { enabled && data?.ok == true && relayFresh(data, now: now) }
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
@@ -459,6 +494,11 @@ struct LinksAPICardView: View {
                 Text(!enabled ? "待接入" : valid ? (data?.remaining_amount != nil ? "已同步" : "仅用量已同步") : "待连接").font(.system(size: 10)).foregroundColor(valid && data?.remaining_amount != nil ? .green : .orange)
                 Button(action: onSettings) { Image(systemName: "slider.horizontal.3") }.buttonStyle(.plain).accessibilityLabel("中转站设置")
             }.font(.system(size: 12))
+            if let provider = data?.provider_name {
+                Text("CC Switch · " + (data?.provider_app ?? "") + " · " + provider)
+                    .font(.system(size: 9.5)).foregroundColor(.secondary).lineLimit(1)
+                if !compact, let origin = data?.provider_origin { Text(origin).font(.system(size: 9)).lineLimit(1) }
+            }
             if valid {
                 HStack {
                     Text("剩余费用额度")
@@ -468,7 +508,9 @@ struct LinksAPICardView: View {
                 }.font(.system(size: compact ? 11 : 14))
                 if data?.unlimited == true {
                     Text("当前 Key 未设限，无法从它取得账户剩余余额").foregroundColor(.orange)
-                    Button("配置账户余额查询", action: onSettings).buttonStyle(.borderless)
+                    if data?.source_label != "CC Switch 当前提供商" {
+                        Button("配置账户余额查询", action: onSettings).buttonStyle(.borderless)
+                    }
                 }
                 Text("已用费用：" + relayAmount(data?.used_amount, unit: data?.amount_unit))
                 if !compact {
@@ -477,15 +519,48 @@ struct LinksAPICardView: View {
                     Text(syncLabel(data?.last_success_at))
                 }
             } else {
-                Text(!enabled ? "已准备 · 配置后通过网络持续查询费用余额" : data?.status_msg ?? "等待网络查询")
+                Text(!enabled ? "在设置中启用 CC Switch 中转站查询" : data?.status_msg ?? "等待网络查询")
                 if !compact {
                     HStack {
                         Button(enabled ? "重新查询" : "配置接入", action: enabled ? onRetry : onSettings)
-                        Button("打开控制台") { NSWorkspace.shared.open(URL(string: "https://linksapi.cn/dashboard/overview")!) }
+                        if let url = relaySiteURL(data?.dashboard_url) {
+                            Button("打开中转站") { NSWorkspace.shared.open(url) }
+                        }
                     }.buttonStyle(.borderless)
                 }
             }
+            if enabled, let analysis = data?.analysis {
+                Divider()
+                if analysis.available == true, (analysis.sample_count ?? 0) > 0 {
+                    Text((analysis.source ?? "用量分析") + " · \(analysis.sample_count ?? 0) 条")
+                        .font(.system(size: 9)).lineLimit(2)
+                    analysisRow("今日", period: analysis.today, unit: analysis.unit)
+                    analysisRow("近7日", period: analysis.week, unit: analysis.unit)
+                    if !compact {
+                        Text(analysis.source?.hasPrefix("站点") == true ? "仅消耗记录；Token 含输入与输出" : "仅本机记录；费用为估算值，非站点账单").font(.system(size: 9))
+                        if let models = analysis.models, !models.isEmpty {
+                            Text("返回日志模型：" + models.map { "\($0.name) \($0.requests)次" }.joined(separator: " · "))
+                                .font(.system(size: 9)).lineLimit(2)
+                        }
+                        if analysis.sampled == true { Text("已达返回条数上限，以上为部分记录").foregroundColor(.orange) }
+                    }
+                } else {
+                    Text(analysis.message ?? "当前 Key 未返回可分析的消耗日志").font(.system(size: 9)).lineLimit(2)
+                }
+            }
+            if !compact, let url = relaySiteURL(data?.dashboard_url) {
+                Button("打开当前中转站") { NSWorkspace.shared.open(url) }.buttonStyle(.borderless)
+            }
         }.font(.system(size: 10)).foregroundColor(.gray).padding(11).background(Color.white.opacity(0.045)).cornerRadius(12)
+    }
+    @ViewBuilder func analysisRow(_ label: String, period: UsagePeriod?, unit: String?) -> some View {
+        if let period = period {
+            HStack {
+                Text(label + " \(period.requests ?? 0)次 · " + (period.tokens.map { "\($0) Token" } ?? "Token 未提供"))
+                Spacer(minLength: 3)
+                Text(relayAmount(period.amount, unit: unit)).monospacedDigit()
+            }.font(.system(size: 9.5))
+        }
     }
 }
 
@@ -574,8 +649,9 @@ class ConfigState: ObservableObject {
     @Published var claudeName: String = "Antigravity · Claude"
     @Published var relayEnabled = false
     @Published var relayVisible = true
-    @Published var relayName = "Claude · LinksAPI"
-    @Published var relayUseClaudeSettings = false
+    @Published var relayName = "API · CC Switch"
+    @Published var relaySource = "ccswitch"
+    @Published var relayClient = "claude"
     @Published var relayMode = "account"
     @Published var relayKey = ""
     @Published var relayUserId = ""
@@ -619,9 +695,10 @@ class ConfigState: ObservableObject {
         if let relay = dict["linksapi"] as? [String: Any] {
             relayEnabled = relay["enabled"] as? Bool ?? false
             relayVisible = relay["visible"] as? Bool ?? true
-            relayName = relay["name"] as? String ?? "Claude · LinksAPI"
+            relayName = relay["name"] as? String ?? "API · CC Switch"
             relayMode = relay["query_mode"] as? String ?? "account"
-            relayUseClaudeSettings = relay["credential_source"] as? String == "claude_settings"
+            relaySource = relay["credential_source"] as? String ?? "manual"
+            relayClient = relay["ccswitch_app"] as? String ?? "claude"
             relayThreshold = relay["low_balance_threshold"] as? Double ?? 5
         }
         let credentialURL = URL(fileURLWithPath: tokensDir + "/linksapi.json")
@@ -654,15 +731,16 @@ class ConfigState: ObservableObject {
 
         var relayCfg = rootDict["linksapi"] as? [String: Any] ?? [:]
         relayCfg["enabled"] = relayEnabled; relayCfg["visible"] = relayVisible
-        relayCfg["name"] = relayName; relayCfg["query_mode"] = relayUseClaudeSettings ? "token" : relayMode
-        relayCfg["credential_source"] = relayUseClaudeSettings ? "claude_settings" : "manual"
+        relayCfg["name"] = relayName; relayCfg["query_mode"] = relaySource == "ccswitch" ? "auto" : relaySource == "claude_settings" ? "token" : relayMode
+        relayCfg["credential_source"] = relaySource
+        relayCfg["ccswitch_app"] = relayClient
         relayCfg["low_balance_threshold"] = relayThreshold
         rootDict["linksapi"] = relayCfg
         let credentialURL = URL(fileURLWithPath: tokensDir + "/linksapi.json")
         var credentials: [String: Any] = [:]
         if let data = try? Data(contentsOf: credentialURL), let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { credentials = saved }
         let cleanKey = relayKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanKey.isEmpty || (relayUserId.trimmingCharacters(in: .whitespacesAndNewlines) != (credentials["user_id"] as? String ?? "")) {
+        if relaySource == "manual" && (!cleanKey.isEmpty || (relayUserId.trimmingCharacters(in: .whitespacesAndNewlines) != (credentials["user_id"] as? String ?? ""))) {
             if cleanKey.contains(where: { $0.isWhitespace }) { throw NSError(domain: "LinksAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: "查询凭证含有空格或换行，请重新粘贴"]) }
             if !cleanKey.isEmpty { credentials[relayMode == "account" ? "access_token" : "api_key"] = cleanKey }
             credentials["user_id"] = relayUserId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -784,31 +862,37 @@ struct ConfigRootView: View {
                     }
                     Divider()
                     VStack(alignment: .leading, spacing: 9) {
-                        Text("Claude 中转站 · LinksAPI").font(.headline)
+                        Text("API 中转站 · CC Switch").font(.headline)
                         Toggle("在看板显示中转站", isOn: $state.relayVisible)
-                        Toggle("启用网络费用查询", isOn: $state.relayEnabled)
+                        Toggle("启用网络用量查询", isOn: $state.relayEnabled)
                         TextField("卡片名称", text: $state.relayName).textFieldStyle(.roundedBorder)
-                        Toggle("跟随 Claude 当前的 LinksAPI 配置", isOn: $state.relayUseClaudeSettings)
-                            .onChange(of: state.relayUseClaudeSettings) { _, follow in if follow { state.relayMode = "token" } }
-                        Picker("查询范围", selection: $state.relayMode) {
-                            Text("账户钱包余额").tag("account")
-                            Text("API Key 独立额度").tag("token")
+                        Picker("API 配置来源", selection: $state.relaySource) {
+                            Text("CC Switch 当前提供商（推荐）").tag("ccswitch")
+                            Text("手动配置 LinksAPI（兼容）").tag("manual")
+                            Text("Claude 本地配置（兼容）").tag("claude_settings")
                         }
-                        .disabled(state.relayUseClaudeSettings)
-                        if state.relayUseClaudeSettings {
-                            Text("直接读取 Claude 本机配置中的 Key，不复制保存；切换到其他服务商后停止查询 LinksAPI。").font(.caption).foregroundColor(.secondary)
+                        if state.relaySource == "ccswitch" {
+                            Picker("CC Switch 客户端", selection: $state.relayClient) {
+                                Text("Claude Code").tag("claude")
+                                Text("Claude Desktop").tag("claude-desktop")
+                                Text("Codex").tag("codex")
+                                Text("Gemini").tag("gemini")
+                            }
+                            Text("只读 CC Switch 已选提供商的地址与凭证，不复制 Key，也不修改 CC Switch。切换提供商后自动跟随；只查询所选客户端，避免请求其他未使用的中转站。").font(.caption).foregroundColor(.secondary)
+                            Text("余额和累计用量来自站点接口；今日/近7日统计仅覆盖站点返回日志。站点不提供日志时，单独标明 CC Switch 本机估算记录，不能当作完整账单。站点用量与日志约每5分钟自动查询；每分钟检查提供商切换，手动刷新立即查询。").font(.caption).foregroundColor(.secondary)
                         } else {
-                        SecureField(state.relayMode == "account" ? "账户访问令牌（留空保留已有值）" : "API Key（留空保留已有值）", text: $state.relayKey).textFieldStyle(.roundedBorder)
-                        }
-                        if state.relayMode == "account" {
-                            TextField("用户 ID", text: $state.relayUserId).textFieldStyle(.roundedBorder)
-                            Text("账户钱包模式需站点用户级访问令牌（Access Token）及用户 ID。凭证可在站点个人设置中查看；它与 Claude 的模型 API Key 不同。余额可能由多个模型共享。").font(.caption).foregroundColor(.secondary)
-                        } else {
-                            Text("此模式显示单个 API Key 的费用额度。未设上限的 Key 不能据此得到账户钱包余额。").font(.caption).foregroundColor(.secondary)
+                            Picker("查询范围", selection: $state.relayMode) {
+                                Text("账户钱包余额").tag("account")
+                                Text("API Key 独立额度").tag("token")
+                            }.disabled(state.relaySource == "claude_settings")
+                            if state.relaySource == "manual" {
+                                SecureField(state.relayMode == "account" ? "账户访问令牌（留空保留）" : "API Key（留空保留）", text: $state.relayKey).textFieldStyle(.roundedBorder)
+                                if state.relayMode == "account" { TextField("用户 ID", text: $state.relayUserId).textFieldStyle(.roundedBorder) }
+                            }
+                            Text("兼容旧 LinksAPI 配置。推荐切换为直接跟随 CC Switch。").font(.caption).foregroundColor(.secondary)
                         }
                         Stepper("余额提醒：低于 \(Int(state.relayThreshold)) 站内 USD", value: $state.relayThreshold, in: 0...100, step: 1)
-                        Text("每 60 秒直接请求 LinksAPI，不依赖网页打开；凭证仅保存在本机专用文件。").font(.caption).foregroundColor(.secondary)
-                        Button("打开 LinksAPI 控制台") { NSWorkspace.shared.open(URL(string: "https://linksapi.cn/dashboard/overview")!) }
+                        Text("只发送用量查询，不调用模型；不支持的站点明确显示未提供。Key 未设限不代表账户余额无限。").font(.caption).foregroundColor(.secondary)
                     }.padding(12).background(Color.white.opacity(0.05)).cornerRadius(10)
                     Divider()
                     Toggle("启用 Antigravity", isOn: $state.agyEnabled)

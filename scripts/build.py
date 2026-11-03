@@ -14,7 +14,7 @@ DIST = ROOT / 'dist'
 CACHE = ROOT / '.cache'
 VERSION = (ROOT / 'VERSION').read_text().strip()
 APP_NAME = 'AI 桌面卡片.app'
-SCRIPTS = ['fetch_quotas.py', 'bind_account.py', 'fetch_linksapi.py']
+SCRIPTS = ['fetch_quotas.py', 'bind_account.py', 'fetch_linksapi.py', 'ccswitch_source.py']
 
 def run(*args, **kwargs):
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
@@ -77,7 +77,7 @@ if __name__ == '__main__':
     info = dict(CFBundleDisplayName='AI 桌面卡片', CFBundleName='AI 桌面卡片',
                 CFBundleExecutable='AIDesktopCard', CFBundleIdentifier='local.ai.quota-dashboard',
                 CFBundlePackageType='APPL', CFBundleShortVersionString=VERSION,
-                CFBundleVersion='102', CFBundleIconFile='AppIcon', LSMinimumSystemVersion='14.0', LSUIElement=True,
+                CFBundleVersion='103', CFBundleIconFile='AppIcon', LSMinimumSystemVersion='14.0', LSUIElement=True,
                 NSHighResolutionCapable=True,
                 NSAppleEventsUsageDescription='读取 Chrome 当前登录的 ChatGPT 会话，用于本地看板查询对应账号的 Codex 使用额度。')
     (APP / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))

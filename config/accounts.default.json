@@ -30,9 +30,10 @@
   "linksapi": {
     "enabled": false,
     "visible": true,
-    "name": "Claude · LinksAPI",
-    "query_mode": "account",
-    "credential_source": "manual",
-    "low_balance_threshold": 5
+    "name": "API · CC Switch",
+    "query_mode": "auto",
+    "credential_source": "ccswitch",
+    "low_balance_threshold": 5,
+    "ccswitch_app": "claude"
   }
 }

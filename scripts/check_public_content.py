@@ -28,12 +28,13 @@ APPROVED_HISTORICAL_PATH_ASSERTIONS = {
     },
 }
 PRIVATE_FILENAMES = {
+    'cc-switch.db', 'cc-switch.db-wal', 'cc-switch.db-shm', 'ccswitch_analysis.json',
     'auth.json', 'ai_accounts_config.json', 'ai_quota_config.json',
     'card_config.json', 'desktop_card_pos.json', 'chatgpt_web_token.json',
     'quota_cache.json', 'gpt_accounts_quota.json', 'chatgpt_web_quota.json',
     'antigravity_quota.json', 'linksapi_quota.json', '.DS_Store',
 }
-PRIVATE_DIRECTORIES = {'tokens', 'backups', '.swiftbar', '.cache', '.build.noindex', 'dist'}
+PRIVATE_DIRECTORIES = {'.cc-switch', 'tokens', 'backups', '.swiftbar', '.cache', '.build.noindex', 'dist'}
 PATTERNS = {
     'private-key': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),
     'github-token': re.compile(rb'\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}'),

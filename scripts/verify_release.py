@@ -27,11 +27,13 @@ for filename in ['AIDesktopCard', 'ChromeSessionBridge']:
 run('codesign', '--verify', '--deep', '--strict', APP)
 resources = APP / 'Contents/Resources'
 assert (resources / 'AppIcon.icns').stat().st_size > 10000
+assert (resources / 'scripts/ccswitch_source.py').is_file()
 config = json.loads((resources / 'accounts.default.json').read_text())
 assert all(not a.get('email') and a['follow_current_session'] for a in config['chatgpt_accounts'])
 assert config['linksapi']['enabled'] is False
-assert config['linksapi']['query_mode'] == 'account'
-assert config['linksapi']['credential_source'] == 'manual'
+assert config['linksapi']['query_mode'] == 'auto'
+assert config['linksapi']['credential_source'] == 'ccswitch'
+assert config['linksapi']['ccswitch_app'] == 'claude'
 assert not (APP / 'Contents/Resources/tokens').exists()
 for path in (ROOT / 'src').iterdir():
     if path.is_file():
@@ -66,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='quota-pkg-') as temp:
     expanded = Path(temp) / 'expanded'
     run('pkgutil', '--expand-full', pkg, expanded)
     installed = next(expanded.rglob('AI 桌面卡片.app'))
-    for relative in ['Contents/MacOS/AIDesktopCard', 'Contents/MacOS/ChromeSessionBridge', 'Contents/Resources/AppIcon.icns']:
+    for relative in ['Contents/MacOS/AIDesktopCard', 'Contents/MacOS/ChromeSessionBridge', 'Contents/Resources/AppIcon.icns', 'Contents/Resources/scripts/ccswitch_source.py']:
         assert hashlib.sha256((APP / relative).read_bytes()).digest() == hashlib.sha256((installed / relative).read_bytes()).digest()
     run('codesign', '--verify', '--deep', '--strict', installed)
 dmg = DIST / (STEM + '.dmg')

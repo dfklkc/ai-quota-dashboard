@@ -36,7 +36,7 @@ enum QuotaPaths {
     static func selfCheck() -> Int32 {
         do {
             try prepareDefaults()
-            let required = [python.path, script("fetch_quotas.py"), script("bind_account.py"), script("fetch_linksapi.py"),
+            let required = [python.path, script("fetch_quotas.py"), script("bind_account.py"), script("fetch_linksapi.py"), script("ccswitch_source.py"),
                             Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ChromeSessionBridge").path,
                             resourceURL.appendingPathComponent("AppIcon.icns").path]
             guard required.allSatisfy({ FileManager.default.fileExists(atPath: $0) }) else {

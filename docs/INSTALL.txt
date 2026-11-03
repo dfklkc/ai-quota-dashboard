@@ -1,4 +1,4 @@
-AI 桌面卡片 1.0.0
+AI 桌面卡片 1.0.3
 
 支持 macOS 14 或更高版本，Apple Silicon 与 Intel。
 
@@ -17,7 +17,9 @@ AI 桌面卡片 1.0.0
 GPT 卡片显示 Codex 使用额度，跟随本机 App 与 Chrome 登录。
 Chrome 读取需要 macOS 自动化权限及 Chrome 的 Apple 事件 JavaScript 权限。
 Antigravity 必须正在运行并提供本地额度服务。
-LinksAPI 默认停用，需要你自行配置查询凭证。
+API 中转站默认停用。在设置中选择 CC Switch 客户端并启用，跟随其当前提供商。
+支持 NewAPI / Sub2API 用量接口；站点用量和日志约5分钟自动更新，手动刷新立即查询。
+统计只覆盖站点返回的记录；不可用时明确区分本机估算，不能当作完整账单。
 未设限 API Key 只能查询对应 Key 的用量，不能据此推算账户钱包余额。
 
 发布包不含作者的账号配置、浏览器会话、API Key、密码或额度缓存。

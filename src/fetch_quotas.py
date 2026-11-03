@@ -348,12 +348,12 @@ def fetch_antigravity_quota(config, force=False):
     atomic_json(AGY_CACHE, record_attempt(result, old))
 
 
-def query_linksapi_quota(cfg):
+def query_linksapi_quota(cfg, old=None, force=False):
     import importlib.util
     spec = importlib.util.spec_from_file_location('local_linksapi', Path(__file__).with_name('fetch_linksapi.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.fetch_quota(cfg)
+    return module.fetch_quota(cfg, previous=old, force=force) if cfg.get("credential_source") == "ccswitch" else module.fetch_quota(cfg)
 
 
 def fetch_linksapi_quota(config, force=False):
@@ -363,10 +363,16 @@ def fetch_linksapi_quota(config, force=False):
     path = ROOT / 'linksapi_quota.json'
     old = read_json(path, {})
     old = old if isinstance(old, dict) else {}
-    if not force and retry_pending(old):
+    if cfg.get('credential_source') != 'ccswitch' and not force and retry_pending(old):
         return
-    result = query_linksapi_quota(cfg)
-    atomic_json(path, record_attempt(result, old))
+    result = query_linksapi_quota(cfg, old, force) if cfg.get('credential_source') == 'ccswitch' else query_linksapi_quota(cfg)
+    if result is old:
+        return
+    prior = {} if cfg.get('credential_source') == 'ccswitch' and result.get('source_signature') != old.get('source_signature') else old
+    recorded = record_attempt(result, prior)
+    if cfg.get('credential_source') == 'ccswitch' and (recorded.get('ok') or recorded.get('http_status') == 429):
+        recorded['next_retry_at'] = time.time() + 300
+    atomic_json(path, recorded)
 
 
 def main():

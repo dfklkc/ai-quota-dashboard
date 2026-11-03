@@ -132,6 +132,22 @@ for value in [Double.nan, .infinity, -.infinity, 1e100] {
     check(resetLabel(value, now: Date()) == "未提供重置时间", "Invalid timestamps must not crash the display")
     check(windowTitle(value, fallback: "unknown") == "unknown", "Invalid window durations must not crash the display")
 }
+try write("ai_accounts_config.json", configuration(relay: true))
+try write("linksapi_quota.json", ["ok": true, "used_amount": 1.25, "amount_unit": "站内 USD", "last_success_at": stamp,
+                               "provider_name": "Fixture relay", "provider_app": "claude", "source_label": "CC Switch 当前提供商",
+                               "analysis": ["available": true, "source": "站点当前Key日志", "sample_count": 2,
+                                            "today": ["requests": 1, "tokens": 100, "amount": 0.1],
+                                            "week": ["requests": 2, "tokens": 200, "amount": 0.2]]])
+vm.loadCaches()
+check(vm.healthy && !vm.attention.contains("余额待配置"), "Valid Key usage is healthy even when no wallet balance is returned")
+check(vm.linksapi?.provider_name == "Fixture relay" && vm.linksapi?.analysis?.today?.tokens == 100, "CC Switch source and analysis must decode without affecting quota")
+check(relaySiteURL("file:///tmp/example") == nil && relaySiteURL("https://user:pass@relay.example.com") == nil, "Dashboard links must not open unsafe URLs")
+check(relaySiteURL("https://relay.example.com/dashboard/overview") != nil, "Validated relay dashboard should be openable")
+var delayedRelay = vm.linksapi!
+delayedRelay.last_success_at = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300))
+check(relayFresh(delayedRelay, now: Date()), "CC Switch cached usage must remain valid until its scheduled refresh")
+delayedRelay.last_success_at = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-421))
+check(!relayFresh(delayedRelay, now: Date()), "Old CC Switch usage must expire after the bounded freshness window")
 let normal = Process(); normal.executableURL = URL(fileURLWithPath: "/usr/bin/true")
 let normalFinished = try BoundedProcess.run(normal, timeout: 2)
 check(normalFinished && normal.terminationStatus == 0, "Process completion should return without polling")
