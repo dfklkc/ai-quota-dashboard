@@ -4,7 +4,7 @@
 
 ## 下载与安装
 
-在本仓库 [Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest) 下载 `AIQuotaDashboard-1.0.3-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。
+在本仓库下载 `AIQuotaDashboard-1.0.4-macOS-universal.pkg`，或下载 DMG 后把应用拖入 Applications。[Releases](https://github.com/dfklkc/ai-quota-dashboard/releases/latest)
 
 - macOS 14 或更高版本；支持 Apple Silicon 与 Intel。
 - 内置独立 Python 运行时，使用者无需安装 Python、Xcode 或命令行工具。
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | App | 当前本机登录账号的 **Codex 使用额度** | 读取当前用户的 Codex 登录信息 |
 | Chrome | 当前 ChatGPT 会话对应的 **Codex 使用额度** | 已登录页面、现有自动化与 Apple 事件 JavaScript 权限 |
-| Antigravity | 服务实际提供的 Gemini / Claude 额度窗口 | 本机应用及额度服务运行中 |
+| Antigravity | 服务实际提供的 Gemini / Claude 额度窗口 | 本机 Antigravity 桌面版或 IDE 已登录，额度服务运行中 |
 | CC Switch 中转站 | 当前提供商的站点余额/Key 用量，以及可取得的请求、Token、模型统计 | 读取 CC Switch 所选客户端的当前配置；站点提供兼容用量接口 |
 
 GPT 卡片不是 ChatGPT 聊天次数计数器。不存在的窗口显示“未提供”。当前会话读取失败时，不沿用上一个账号的额度。

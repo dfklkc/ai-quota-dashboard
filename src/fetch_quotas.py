@@ -4,12 +4,14 @@ import base64
 import argparse
 import concurrent.futures
 import fcntl
+import http.client
 import json
 import math
 import os
 from pathlib import Path
 import re
 import ssl
+import stat
 import subprocess
 import tempfile
 import time
@@ -283,44 +285,101 @@ def fetch_all_gpt_accounts(config, force=False, source=None):
     save()
 
 
+def read_agy_daemon(path):
+    # The desktop app publishes a local connection record owned by the signed-in OS user.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as file:
+            info = os.fstat(file.fileno())
+            if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077:
+                record = json.loads(file.read(16384))
+                if isinstance(record, dict):
+                    return record
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def query_agy_summary(port, token):
+    # The service uses a self-signed certificate. Connect directly to the checked
+    # loopback listener with no proxy or redirect support.
+    route = '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary'
+    connection = http.client.HTTPSConnection('127.0.0.1', port, timeout=2,
+                                            context=ssl._create_unverified_context())
+    try:
+        connection.request('POST', route, b'{}', {'Content-Type': 'application/json', 'x-codeium-csrf-token': token})
+        with connection.getresponse() as response:
+            if response.status == 200:
+                data = json.load(response)
+                summary = data.get('response') if isinstance(data, dict) else None
+                if isinstance(summary, dict) and isinstance(summary.get('groups'), list):
+                    return summary
+    except (OSError, ValueError, http.client.HTTPException):
+        pass
+    finally:
+        connection.close()
+    return None
+
+
 def retrieve_agy_summary():
-    processes = subprocess.run(['ps', '-axo', 'pid=,args='], capture_output=True, text=True, timeout=2).stdout
-    for line in processes.splitlines():
-        if 'language_server' not in line or '--csrf_token' not in line:
-            continue
-        match = re.search(r'--csrf_token(?:=|\s+)([^\s]+)', line)
-        if not match:
-            continue
-        pid = line.split()[0]
-        ports = subprocess.run(['/usr/sbin/lsof', '-a', '-p', pid, '-iTCP', '-sTCP:LISTEN', '-Fn'],
+    processes = subprocess.run(['/bin/ps', '-axww', '-o', 'uid=,pid=,comm='],
                                capture_output=True, text=True, timeout=2).stdout
-        for port in dict.fromkeys(re.findall(r'^n.*:(\d+)$', ports, re.M)):
-            # Antigravity's existing local RPC uses its self-signed loopback certificate.
-            ctx = ssl._create_unverified_context()
-            req = urllib.request.Request(
-                'https://127.0.0.1:%s/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary' % port,
-                data=b'{}', headers={'Content-Type': 'application/json', 'x-codeium-csrf-token': match[1]})
-            try:
-                with urllib.request.urlopen(req, context=ctx, timeout=2) as resp:
-                    data = json.load(resp)
-                if isinstance(data.get('response', {}).get('groups'), list):
-                    return data['response']
-            except Exception:
+    servers = re.findall(r'^\s*' + str(os.getuid()) + r'\s+([1-9]\d*)\s+/[^\n]*/(Antigravity(?: IDE)?)\.app'
+                         r'/Contents/Resources/(?:bin|app/extensions/antigravity/bin)'
+                         r'/language_server(?:_[a-z0-9_]+)?$', processes, re.M)
+    desktop = [pid for pid, app in servers if app == 'Antigravity']
+    daemon_dir = Path.home() / '.gemini/antigravity/daemon'
+
+    # Prefer the live desktop session. The IDE can be signed into another account.
+    for pid in desktop or [pid for pid, _ in servers]:
+        try:
+            listeners = subprocess.run(['/usr/sbin/lsof', '-nP', '-a', '-p', pid, '-i4TCP', '-sTCP:LISTEN', '-Fn'],
+                                       capture_output=True, text=True, timeout=2).stdout
+            endpoints = re.findall(r'^n(127\.0\.0\.1|\*):([0-9]+)$', listeners, re.M)
+            if desktop:
+                local_ports = dict.fromkeys(int(port) for host, port in endpoints if host == '127.0.0.1')
+                for http_port in local_ports:
+                    record = read_agy_daemon(daemon_dir / f'hub_{http_port}.json')
+                    if record.get('pid') != int(pid) or record.get('httpPort') != http_port:
+                        continue
+                    port, token = record.get('httpsPort'), record.get('csrfToken')
+                    if type(port) is int and port in local_ports and isinstance(token, str) and token:
+                        summary = query_agy_summary(port, token)
+                        if summary is not None:
+                            return summary
+            ports = dict.fromkeys(int(port) for _, port in endpoints)
+            if not ports:
                 continue
+            args = subprocess.run(['/bin/ps', '-ww', '-p', pid, '-o', 'args='],
+                                  capture_output=True, text=True, timeout=2).stdout
+            match = re.search(r'(?:^|\s)--csrf_token(?:=|\s+)(\S+)', args)
+            if match:
+                for port in ports:
+                    summary = query_agy_summary(port, match[1])
+                    if summary is not None:
+                        return summary
+        except (OSError, subprocess.TimeoutExpired):
+            continue
     return None
 
 
 def parse_agy_summary(summary, cfg):
     result = {'ok': False, 'is_running': True, 'status_msg': '服务已连接，未提供额度窗口', 'email': cfg.get('email', ''),
               'updated_at': now_iso(), 'last_success_at': now_iso()}
-    for model in ('gemini', 'claude'):
-        group = next((g for g in summary.get('groups', []) if model in g.get('displayName', '').lower()), {})
-        for window, key in [('5h', '5h'), ('weekly', 'weekly')]:
-            bucket = next((b for b in group.get('buckets', []) if b.get('window') == window), {})
+    groups = [(g['displayName'].casefold(), g) for g in summary.get('groups', [])
+              if isinstance(g, dict) and isinstance(g.get('displayName'), str)]
+    for model, label in [('gemini', 'gemini models'), ('claude', 'claude and gpt models')]:
+        group = next((g for name, g in groups if name == label), None)
+        if group is None:
+            group = next((g for name, g in groups if model in name and 'argon' not in name), {})
+        buckets = group.get('buckets')
+        buckets = buckets if isinstance(buckets, list) else []
+        for window in ('5h', 'weekly'):
+            bucket = next((b for b in buckets if isinstance(b, dict) and b.get('window') == window), {})
             rem, used, reset = quota_window(bucket, 'remainingFraction', 'resetTime', fraction=True)
-            result[model + '_' + key + '_rem'] = rem
-            result[model + '_' + key + '_used'] = used
-            result[model + '_' + key + '_reset_at'] = reset
+            result[model + '_' + window + '_rem'] = rem
+            result[model + '_' + window + '_used'] = used
+            result[model + '_' + window + '_reset_at'] = reset
     result['ok'] = any(result.get(m + '_' + w + '_rem') is not None for m in ('gemini', 'claude') for w in ('5h', 'weekly'))
     if result['ok']:
         result['status_msg'] = '已同步'
